@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>VeriCopy</string>
+	<key>CFBundleDisplayName</key>
+	<string>VeriCopy</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.spencerbrignac.vericopy</string>
+	<key>CFBundleExecutable</key>
+	<string>VeriCopy</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Built with Claude Code, 2026</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>VeriCopy sends a text through Messages to let you know when a copy finishes.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>VeriCopy runs a local FTP server so your camera can send photos directly to this Mac over WiFi.</string>
+</dict>
+</plist>

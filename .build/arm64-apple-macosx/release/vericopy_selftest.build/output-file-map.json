@@ -1,0 +1,13 @@
+{
+  "": {
+    "dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/vericopy_selftest.build/vericopy_selftest.d",
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/vericopy_selftest.build/vericopy_selftest.o",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/vericopy_selftest.build/primary.swiftdeps"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/vericopy-selftest/main.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/vericopy_selftest.build/main.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/vericopy_selftest.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/vericopy_selftest.build/main.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/vericopy_selftest.build/main.dia"
+  }
+}

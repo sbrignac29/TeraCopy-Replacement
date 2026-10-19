@@ -1,0 +1,151 @@
+{
+  "": {
+    "dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/VeriCopy.d",
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/VeriCopy.o",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/primary.swiftdeps"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/API/APIConfig.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIConfig.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIConfig~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIConfig.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIConfig.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/API/APICoordinator.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APICoordinator.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APICoordinator~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APICoordinator.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APICoordinator.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/API/APIModels.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIModels.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIModels~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIModels.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIModels.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/API/APIRouter.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIRouter.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIRouter~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIRouter.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/APIRouter.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/API/HTTPServer.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/HTTPServer.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/HTTPServer~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/HTTPServer.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/HTTPServer.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/CompletionCountdownWindow.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/CompletionCountdownWindow.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/CompletionCountdownWindow~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/CompletionCountdownWindow.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/CompletionCountdownWindow.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/ContentView.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/ContentView.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/ContentView~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/ContentView.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/ContentView.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/FTPConnection.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPConnection.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPConnection~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPConnection.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPConnection.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/FTPCoordinator.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPCoordinator.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPCoordinator~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPCoordinator.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPCoordinator.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/FTPServer.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPServer.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPServer~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPServer.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/FTPServer.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/IMessageChannel.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/IMessageChannel.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/IMessageChannel~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/IMessageChannel.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/IMessageChannel.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/JobStatsView.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/JobStatsView.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/JobStatsView~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/JobStatsView.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/JobStatsView.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/KeychainStore.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/KeychainStore.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/KeychainStore~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/KeychainStore.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/KeychainStore.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/LocalNotificationChannel.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/LocalNotificationChannel.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/LocalNotificationChannel~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/LocalNotificationChannel.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/LocalNotificationChannel.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/MenuBarView.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/MenuBarView.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/MenuBarView~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/MenuBarView.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/MenuBarView.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/NotificationChannel.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationChannel.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationChannel~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationChannel.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationChannel.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/NotificationCoordinator.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationCoordinator.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationCoordinator~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationCoordinator.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/NotificationCoordinator.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/PowerController.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerController.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerController~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerController.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerController.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/PowerCoordinator.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerCoordinator.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerCoordinator~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerCoordinator.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/PowerCoordinator.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/QueueViewModel.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/QueueViewModel.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/QueueViewModel~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/QueueViewModel.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/QueueViewModel.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/SettingsView.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SettingsView.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SettingsView~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SettingsView.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SettingsView.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/SystemPowerController.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SystemPowerController.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SystemPowerController~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SystemPowerController.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/SystemPowerController.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/TransferJob.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/TransferJob.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/TransferJob~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/TransferJob.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/TransferJob.dia"
+  },
+  "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopy/VeriCopyApp.swift": {
+    "object": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/VeriCopyApp.swift.o",
+    "swiftmodule": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/VeriCopyApp~partial.swiftmodule",
+    "swift-dependencies": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/VeriCopyApp.swiftdeps",
+    "diagnostics": "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/VeriCopyApp.dia"
+  }
+}

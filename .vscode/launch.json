@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TeraCopy Replacement}",
+            "name": "Debug vericopy-selftest",
+            "target": "vericopy-selftest",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug vericopy-selftest"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TeraCopy Replacement}",
+            "name": "Release vericopy-selftest",
+            "target": "vericopy-selftest",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release vericopy-selftest"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TeraCopy Replacement}",
+            "name": "Debug VeriCopy",
+            "target": "VeriCopy",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug VeriCopy"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TeraCopy Replacement}",
+            "name": "Release VeriCopy",
+            "target": "VeriCopy",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release VeriCopy"
+        }
+    ]
+}
