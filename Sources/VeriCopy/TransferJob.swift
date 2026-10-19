@@ -76,8 +76,8 @@ final class TransferJob: ObservableObject, Identifiable {
     var finishedAt: Date?
     /// True for jobs created over the local API rather than built in the window.
     var createdViaAPI = false
-    /// Raw seconds remaining from the engine's estimator, for the API. Nil while the
-    /// estimate is still warming up.
+    /// The same smoothed countdown as `etaText`, but to the second instead of rounded for
+    /// display, for the API. Nil while the estimate is still warming up.
     private(set) var secondsRemaining: Int?
 
     // Stats view: read/write throughput series and live values.
@@ -458,20 +458,10 @@ final class TransferJob: ObservableObject, Identifiable {
     //
     // The engine supplies a raw estimate roughly fifteen times a second from a fitted cost
     // model. Everything here is presentation: a raw number redrawn at 15 Hz is unreadable
-    // however good the model is.
+    // however good the model is. `ETASmoother` holds the predicted finish time steady and
+    // turns it into a countdown.
 
-    /// Smoothing time constants. An estimate that drops is good news and can arrive at once;
-    /// one that climbs is the reading people distrust, so it is approached slowly — unless it
-    /// stays high, which means the job really did get slower.
-    private static let etaFallTau: TimeInterval = 2
-    private static let etaRiseTau: TimeInterval = 15
-    private static let etaSnapAfter: TimeInterval = 10
-    private static let etaRedrawInterval: TimeInterval = 1
-
-    private var smoothedETA: TimeInterval?
-    private var lastETAUpdate: Date?
-    private var risingSince: Date?
-    private var lastETARedraw = Date.distantPast
+    private var etaSmoother = ETASmoother()
 
     /// Applies one progress reading from the engine.
     func applyProgress(_ progress: TransferProgress) {
@@ -480,10 +470,6 @@ final class TransferJob: ObservableObject, Identifiable {
         workDone = progress.workDone
         workTotal = progress.workTotal
         isVerificationPhase = progress.isVerifying
-        // The raw estimate, for the API. `etaText` below is the same number smoothed and
-        // rounded for display — smoothing is presentation, and a dashboard polling every
-        // second or two does not need the 15 Hz jitter damped for it.
-        secondsRemaining = progress.secondsRemaining.map { Int($0.rounded()) }
         sampleOverallSpeed(workDone: progress.workDone)
         updateETA(raw: progress.secondsRemaining)
     }
@@ -501,45 +487,16 @@ final class TransferJob: ObservableObject, Identifiable {
     }
 
     private func updateETA(raw: TimeInterval?) {
-        let now = Date()
-        guard let raw, isActive else {
-            smoothedETA = nil
-            lastETAUpdate = nil
-            risingSince = nil
-            if etaText != nil { etaText = nil }
+        guard isActive else {
+            resetETA()
             return
         }
-
-        defer { lastETAUpdate = now }
-        guard let previous = smoothedETA, let last = lastETAUpdate else {
-            smoothedETA = raw
-            publishETA(raw, at: now, force: true)
-            return
-        }
-
-        let dt = max(0, now.timeIntervalSince(last))
-        if raw > previous {
-            let since = risingSince ?? now
-            risingSince = since
-            if now.timeIntervalSince(since) >= Self.etaSnapAfter {
-                // It has been climbing for long enough that this is the truth, not a blip.
-                smoothedETA = raw
-                risingSince = nil
-            } else {
-                smoothedETA = previous + (raw - previous) * (1 - exp(-dt / Self.etaRiseTau))
-            }
-        } else {
-            risingSince = nil
-            smoothedETA = previous + (raw - previous) * (1 - exp(-dt / Self.etaFallTau))
-        }
-        publishETA(smoothedETA ?? raw, at: now, force: false)
-    }
-
-    private func publishETA(_ seconds: TimeInterval, at now: Date, force: Bool) {
-        guard force || now.timeIntervalSince(lastETARedraw) >= Self.etaRedrawInterval else { return }
-        lastETARedraw = now
-        let text = TimeRemaining.describe(seconds)
-        if text != etaText { etaText = text }
+        etaSmoother.update(raw: raw)
+        // The API reports the same countdown the window shows, to the second. It used to get the
+        // raw model output, which moves whenever the model learns something — a dashboard
+        // polling every few seconds saw that as the job lurching.
+        secondsRemaining = etaSmoother.seconds.map { Int($0.rounded()) }
+        if etaSmoother.text != etaText { etaText = etaSmoother.text }
     }
 
 
@@ -654,12 +611,9 @@ final class TransferJob: ObservableObject, Identifiable {
 
     /// Drops the estimate so a re-run doesn't inherit the previous run's countdown.
     private func resetETA() {
-        etaText = nil
+        etaSmoother.reset()
+        if etaText != nil { etaText = nil }
         secondsRemaining = nil
-        smoothedETA = nil
-        lastETAUpdate = nil
-        risingSince = nil
-        lastETARedraw = .distantPast
     }
 
     private func resetIOTracking() {

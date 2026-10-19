@@ -47,6 +47,9 @@ public final class TransferEngine {
     private let lock = NSLock()
     private var pausedFlag = false
     private var cancelledFlag = false
+    /// Total time spent paused so far, and when the pause now in progress began, if one is.
+    private var pausedTotal: TimeInterval = 0
+    private var pauseStarted: Date?
 
     /// Test hook: pretend source and destination are on different volumes so
     /// move mode exercises the copy+verify+delete path.
@@ -102,12 +105,63 @@ public final class TransferEngine {
 
     // MARK: - Control
 
-    public func pause() { lock.withLock { pausedFlag = true } }
-    public func resume() { lock.withLock { pausedFlag = false } }
-    public func cancel() { lock.withLock { cancelledFlag = true; pausedFlag = false } }
+    public func pause() { lock.withLock { pausedFlag = true; pauseStarted = pauseStarted ?? Date() } }
+    public func resume() { lock.withLock { endPause(); pausedFlag = false } }
+    public func cancel() { lock.withLock { cancelledFlag = true; endPause(); pausedFlag = false } }
 
     public var isPaused: Bool { lock.withLock { pausedFlag } }
     public var isCancelled: Bool { lock.withLock { cancelledFlag } }
+
+    /// Folds a pause that has just ended into the total. Call with `lock` held.
+    private func endPause() {
+        guard let started = pauseStarted else { return }
+        pausedTotal += Date().timeIntervalSince(started)
+        pauseStarted = nil
+    }
+
+    // MARK: - Active time
+    //
+    // A file's timing feeds the time estimate, and a pause in the middle of a file would make the
+    // drive look as though it had stalled for as long as the pause lasted. So every stopwatch
+    // discounts whatever time the job spent paused while it was running.
+
+    struct Stopwatch: Sendable {
+        let began: Date
+        let pausedAtStart: TimeInterval
+    }
+
+    private func startStopwatch() -> Stopwatch {
+        Stopwatch(began: Date(), pausedAtStart: pausedTime())
+    }
+
+    /// Seconds since the stopwatch started, not counting time spent paused.
+    private func activeSeconds(_ watch: Stopwatch) -> TimeInterval {
+        max(0, Date().timeIntervalSince(watch.began) - (pausedTime() - watch.pausedAtStart))
+    }
+
+    /// Total time spent paused, including a pause still in progress.
+    private func pausedTime() -> TimeInterval {
+        lock.withLock { pausedTotal + (pauseStarted.map { Date().timeIntervalSince($0) } ?? 0) }
+    }
+
+    /// When the copy or the read-back that is running now began. Written by whichever task is
+    /// doing the I/O and read by `publish()`, so the estimator can learn from a file while it is
+    /// still moving instead of only once it has finished.
+    final class RunClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var watch: Stopwatch?
+
+        func begin(_ watch: Stopwatch) { lock.withLock { self.watch = watch } }
+        func end() { lock.withLock { watch = nil } }
+        var current: Stopwatch? { lock.withLock { watch } }
+    }
+
+    /// What a copy or read-back in progress has to say about speed, or nil if none is running
+    /// or it has not moved a byte yet.
+    private func liveEvidence(_ clock: RunClock, bytes: Int64) -> TransferEstimator.InFlight? {
+        guard bytes > 0, let watch = clock.current else { return nil }
+        return TransferEstimator.InFlight(bytes: bytes, seconds: activeSeconds(watch))
+    }
 
     /// Blocks (async) while paused; throws once cancelled.
     private func checkpoint() async throws {
@@ -225,6 +279,15 @@ public final class TransferEngine {
         // plain local because a pipelined verification reports from its own task while this
         // loop is still copying the next file.
         let verifyInFlight = ByteCounter()
+        // When the copy and the read-back now running began, so the estimator can learn from a
+        // file while it is still moving. Each is ended the moment its phase is over: a phase that
+        // has finished must not keep testifying with a clock that is still running.
+        let copyClock = RunClock()
+        let verifyClock = RunClock()
+        // Whether an estimate has been put on screen yet. The estimator decides when the first one
+        // is worth showing; after that it stays, because a countdown that vanishes and comes back
+        // is worse than one that is a little rough for a moment.
+        var estimateShown = false
 
         func publish() {
             let verifying = verifyInFlight.bytes
@@ -241,11 +304,17 @@ public final class TransferEngine {
                 || (progress.workTotal > 0
                     && Double(progress.workDone) / Double(progress.workTotal) >= Self.estimateGraceFraction)
             if warm, elapsed >= Self.estimateGraceSeconds {
-                progress.secondsRemaining = estimator.secondsRemaining(
+                let forecast = estimator.forecast(
                     copyBytes: copyWorkTotal - copySettled - copyInFlight,
                     copyFiles: copyFilesTotal - copyFilesDone,
                     verifyBytes: verifyWorkTotal - verifySettled - verifying,
-                    verifyFiles: verifyFilesTotal - verifyFilesDone)
+                    verifyFiles: verifyFilesTotal - verifyFilesDone,
+                    copyInFlight: liveEvidence(copyClock, bytes: copyInFlight),
+                    verifyInFlight: liveEvidence(verifyClock, bytes: verifying))
+                if forecast.isGrounded || estimateShown {
+                    estimateShown = true
+                    progress.secondsRemaining = forecast.seconds
+                }
             }
             pump.record(progress: progress)
         }
@@ -312,29 +381,41 @@ public final class TransferEngine {
             verifyInFlight.set(0)
 
             let counter = verifyInFlight
-            let task = Task { [weak self] () throws -> String in
+            let task = Task { [weak self] () throws -> ReadBack in
                 guard let self else { throw TransferError.cancelled }
+                // Timed from in here, from when the read-back starts running to when it ends.
+                // Timed from the caller at collection it would also include however long the
+                // copy running alongside it took: a sidecar read back during the copy of a 20 s
+                // master was being recorded as a 20 s sidecar.
+                let watch = self.startStopwatch()
+                verifyClock.begin(watch)
+                defer { verifyClock.end() }
                 var live = snapshot
-                return try await self.hashFile(destination, algorithm: algorithm, bypassCache: true) { bytes in
+                let hex = try await self.hashFile(destination, algorithm: algorithm, bypassCache: true) { bytes in
                     counter.set(bytes)
                     live.bytesCopied = bytes
                     pump.record(item: live, at: index)
                 }
+                return ReadBack(hex: hex, seconds: self.activeSeconds(watch))
             }
             return PipelinedVerification(index: index, size: items[index].size,
                                          expectedHash: expected,
                                          deleteSourceAfterVerify: deleteSource,
-                                         began: Date(), task: task)
+                                         task: task)
         }
 
         /// Collects a read-back that has been running underneath the last copy, and settles the
         /// file's verdict.
         func collectVerification(_ entry: PipelinedVerification) async {
             var item = items[entry.index]
+            // Whatever the copy above already covered cost the job nothing. Only the time spent
+            // waiting here, for a read-back that outlasted it, is time the job paid for.
+            let waiting = startStopwatch()
             do {
-                let actual = try await entry.task.value
-                guard actual == entry.expectedHash else {
-                    throw TransferError.checksumMismatch(expected: entry.expectedHash, actual: actual)
+                let readBack = try await entry.task.value
+                let exposed = activeSeconds(waiting)
+                guard readBack.hex == entry.expectedHash else {
+                    throw TransferError.checksumMismatch(expected: entry.expectedHash, actual: readBack.hex)
                 }
                 item.status = .done
                 item.message = "\(algorithm.rawValue) verified"
@@ -342,8 +423,8 @@ public final class TransferEngine {
                 if entry.deleteSourceAfterVerify {
                     try FileManager.default.removeItem(at: item.sourceURL)
                 }
-                estimator.record(phase: .verify, bytes: entry.size,
-                                 seconds: Date().timeIntervalSince(entry.began))
+                estimator.recordOverlappedVerify(bytes: entry.size, seconds: readBack.seconds,
+                                                 exposedSeconds: exposed)
                 summary.succeeded += 1
             } catch where Self.isCancellation(error) {
                 item.status = .doneNoVerify
@@ -370,7 +451,10 @@ public final class TransferEngine {
             do {
                 switch mode {
                 case .verify:
-                    let began = Date()
+                    // No in-flight evidence in this mode: each file is read twice, source then
+                    // destination, but progress only follows the first read — so a file half way
+                    // through would look twice as fast as it turns out to be.
+                    let watch = startStopwatch()
                     try await verifyItem(&items[index], destination: destination, algorithm: algorithm,
                                          index: index, pump: pump,
                                          onProgress: { bytes in
@@ -378,7 +462,7 @@ public final class TransferEngine {
                                              publish()
                                          })
                     estimator.record(phase: .verify, bytes: items[index].size,
-                                     seconds: Date().timeIntervalSince(began))
+                                     seconds: activeSeconds(watch))
                     // verifyItem sets the final status (.done/.doneNoVerify, or .failed for a
                     // symlink-target mismatch it handles without throwing). Push that final state
                     // to the UI and update the tallies — otherwise good files stay stuck showing
@@ -443,6 +527,7 @@ public final class TransferEngine {
                             overwriting: overwriting, algorithm: algorithm,
                             policy: copyPolicy, index: index, pump: pump,
                             carriesExtendedMetadata: carriesExtendedMetadata,
+                            copyClock: copyClock, verifyClock: verifyClock,
                             onCopyProgress: { bytes in
                                 copyInFlight = bytes
                                 publish()
@@ -556,7 +641,8 @@ public final class TransferEngine {
                 items[entry.index] = item
                 pump.record(item: item, at: entry.index)
 
-                let began = Date()
+                let watch = startStopwatch()
+                verifyClock.begin(watch)
                 do {
                     let destinationHex = try await hashFile(entry.destination, algorithm: algorithm,
                                                             bypassCache: true) { bytes in
@@ -576,7 +662,7 @@ public final class TransferEngine {
                         try fm.removeItem(at: item.sourceURL)
                     }
                     estimator.record(phase: .verify, bytes: item.size,
-                                     seconds: Date().timeIntervalSince(began))
+                                     seconds: activeSeconds(watch))
                     summary.succeeded += 1
                 } catch where Self.isCancellation(error) {
                     summary.cancelled = true
@@ -589,6 +675,7 @@ public final class TransferEngine {
                     item.bytesCopied = item.size
                     summary.failed += 1
                 }
+                verifyClock.end()
 
                 items[entry.index] = item
                 pump.record(item: item, at: entry.index)
@@ -597,6 +684,7 @@ public final class TransferEngine {
                 verifyInFlight.set(0)
                 publish()
             }
+            verifyClock.end()
             inVerificationPhase = false
         }
 
@@ -658,6 +746,8 @@ public final class TransferEngine {
                                index: Int,
                                pump: ProgressPump,
                                carriesExtendedMetadata: Bool,
+                               copyClock: RunClock,
+                               verifyClock: RunClock,
                                onCopyProgress: (Int64) -> Void,
                                onVerifyProgress: (Int64) -> Void) async throws -> PhaseTimings {
         let fm = FileManager.default
@@ -670,7 +760,9 @@ public final class TransferEngine {
             .appendingPathComponent(".\(destination.lastPathComponent).vcpart")
         try? fm.removeItem(at: partial)
 
-        let copyBegan = Date()
+        let copyWatch = startStopwatch()
+        copyClock.begin(copyWatch)
+        defer { copyClock.end() }   // also covers a copy that throws
         let sourceHex: String
         do {
             sourceHex = try await copyChunked(from: item.sourceURL, to: partial,
@@ -704,7 +796,10 @@ public final class TransferEngine {
             throw error
         }
 
-        var timings = PhaseTimings(copySeconds: Date().timeIntervalSince(copyBegan))
+        var timings = PhaseTimings(copySeconds: activeSeconds(copyWatch))
+        // The copy is over, so it has nothing more to say about speed — the read-back below must
+        // not be mistaken for a copy that has stopped moving.
+        copyClock.end()
 
         item.bytesCopied = item.size
         item.checksum = sourceHex
@@ -728,13 +823,15 @@ public final class TransferEngine {
 
         // Independent read-back with the unified buffer cache bypassed, so we verify
         // what actually landed on disk rather than what the cache remembers.
-        let verifyBegan = Date()
+        let verifyWatch = startStopwatch()
+        verifyClock.begin(verifyWatch)
+        defer { verifyClock.end() }
         let destinationHex = try await hashFile(destination, algorithm: algorithm, bypassCache: true) { bytes in
             item.bytesCopied = bytes
             pump.record(item: item, at: index)
             onVerifyProgress(bytes)
         }
-        timings.verifySeconds = Date().timeIntervalSince(verifyBegan)
+        timings.verifySeconds = activeSeconds(verifyWatch)
         item.bytesCopied = item.size
         guard destinationHex == sourceHex else {
             throw TransferError.checksumMismatch(expected: sourceHex, actual: destinationHex)
@@ -977,8 +1074,13 @@ public final class TransferEngine {
         let size: Int64
         let expectedHash: String
         let deleteSourceAfterVerify: Bool
-        let began: Date
-        let task: Task<String, Error>
+        let task: Task<ReadBack, Error>
+    }
+
+    /// What a finished read-back hands back: the hash, and how long the reading itself took.
+    private struct ReadBack: Sendable {
+        let hex: String
+        let seconds: TimeInterval
     }
 
     /// Carries a hasher into `ioQueue`'s closure. Safe: exactly one hash runs at a time — the

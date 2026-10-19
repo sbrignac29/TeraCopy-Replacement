@@ -8,25 +8,35 @@ import Foundation
 /// someone does — whether to wait, to go and do something else, or to leave it overnight.
 public enum TimeRemaining {
 
+    /// Below this, the countdown stops counting and says "less than a minute".
+    public static let countdownFloor: TimeInterval = 90
+
+    /// The granularity `describe` rounds to at a given magnitude. Locked in bands, so the format
+    /// never flips mid-job the way an hour boundary otherwise makes it.
+    public static func step(for seconds: TimeInterval) -> TimeInterval {
+        if seconds < 600 { return 30 }      // nearest 30 s
+        if seconds < 3600 { return 60 }     // nearest minute
+        return 300                          // nearest 5 minutes
+    }
+
+    /// The figure `describe` is showing for `seconds`, so a caller can tell whether the text
+    /// would change without formatting it. Zero means "almost done".
+    public static func rounded(_ seconds: TimeInterval) -> TimeInterval {
+        guard seconds.isFinite, seconds > 0 else { return 0 }
+        if seconds < countdownFloor { return countdownFloor / 2 }
+        let unit = step(for: seconds)
+        return (seconds / unit).rounded() * unit
+    }
+
     /// Rounds by magnitude, and locks the unit set above ten minutes so the format never
     /// flips mid-job the way an hour boundary otherwise makes it.
     public static func describe(_ seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds > 0 else { return "almost done" }
-        if seconds < 90 { return "less than a minute" }
+        if seconds < countdownFloor { return "less than a minute" }
 
         let formatter = DateComponentsFormatter()
         formatter.unitsStyle = .abbreviated
-        let rounded: TimeInterval
-        if seconds < 600 {
-            rounded = (seconds / 30).rounded() * 30          // nearest 30 s
-            formatter.allowedUnits = [.minute, .second]
-        } else if seconds < 3600 {
-            rounded = (seconds / 60).rounded() * 60          // nearest minute
-            formatter.allowedUnits = [.hour, .minute]
-        } else {
-            rounded = (seconds / 300).rounded() * 300        // nearest 5 minutes
-            formatter.allowedUnits = [.hour, .minute]
-        }
-        return formatter.string(from: rounded) ?? "less than a minute"
+        formatter.allowedUnits = seconds < 600 ? [.minute, .second] : [.hour, .minute]
+        return formatter.string(from: rounded(seconds)) ?? "less than a minute"
     }
 }
