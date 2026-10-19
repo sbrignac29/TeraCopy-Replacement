@@ -282,6 +282,90 @@ struct QueueTest {
         check(!pending2, "stopped queue arms no countdown")
         check(depth2 == 0, "keep-awake released after a stopped queue too", detail: "depth=\(depth2)")
 
+        // Batched delivery must be indistinguishable from one-at-a-time delivery.
+        //
+        // The engine's pump hands a whole pass to `applyUpdates(_:)` in one call, because
+        // delivering per file cost a display frame apiece in the app. That is only a safe
+        // trade if the model cannot tell the difference: the per-file statuses, the live
+        // counts, and the read/write byte totals the stats graph is drawn from all have to
+        // come out identical. Those totals are derived from the SEQUENCE of phase
+        // transitions, so this is the assertion that actually protects the graph.
+        func buildJob(_ count: Int) async -> TransferJob {
+            await MainActor.run {
+                let job = TransferJob(number: 998)
+                job.items = (0..<count).map { i in
+                    FileItem(sourceURL: URL(fileURLWithPath: "/tmp/eq\(i)"),
+                             relativePath: "eq\(i).bin", size: 4096, isSymlink: false)
+                }
+                return job
+            }
+        }
+
+        // The update sequence the engine really produces per file: partial copy, full copy,
+        // read-back, then the finished state.
+        func updateSequence(for job: TransferJob, count: Int) async -> [ItemUpdate] {
+            await MainActor.run {
+                var sequence: [ItemUpdate] = []
+                for index in 0..<count {
+                    let base = job.items[index]
+                    for (status, bytes) in [(ItemStatus.copying, Int64(2048)),
+                                            (.copying, 4096),
+                                            (.verifying, 4096),
+                                            (.done, 4096)] {
+                        var item = base
+                        item.status = status
+                        item.bytesCopied = bytes
+                        item.checksum = "deadbeef"
+                        sequence.append(ItemUpdate(index: index, item: item))
+                    }
+                }
+                return sequence
+            }
+        }
+
+        let eqCount = 300
+        let oneAtATime = await buildJob(eqCount)
+        let asBatch = await buildJob(eqCount)
+        let sequence = await updateSequence(for: oneAtATime, count: eqCount)
+        // Same positions, same statuses — only the shape of the hand-off differs.
+        let batchSequence = await updateSequence(for: asBatch, count: eqCount)
+
+        await MainActor.run {
+            for update in sequence { oneAtATime.updateItem(update.item, at: update.index) }
+            asBatch.applyUpdates(batchSequence)
+        }
+
+        let (a, b) = await MainActor.run {
+            (( counts: oneAtATime.statusCounts, read: oneAtATime.readBytesTotal,
+               write: oneAtATime.writeBytesTotal, statuses: oneAtATime.items.map(\.status),
+               bytes: oneAtATime.items.map(\.bytesCopied), current: oneAtATime.currentItemID,
+               tally: oneAtATime.apiTally ),
+             ( counts: asBatch.statusCounts, read: asBatch.readBytesTotal,
+               write: asBatch.writeBytesTotal, statuses: asBatch.items.map(\.status),
+               bytes: asBatch.items.map(\.bytesCopied), current: asBatch.currentItemID,
+               tally: asBatch.apiTally ))
+        }
+
+        check(a.statuses == b.statuses && a.bytes == b.bytes,
+              "batched delivery leaves the same per-file state as one-at-a-time")
+        check(a.counts.copied == b.counts.copied && a.counts.verified == b.counts.verified
+              && a.counts.failed == b.counts.failed && a.counts.waiting == b.counts.waiting
+              && a.counts.active == b.counts.active && a.counts.skipped == b.counts.skipped,
+              "batched delivery leaves the same live counters",
+              detail: "one-at-a-time copied/verified/active \(a.counts.copied)/\(a.counts.verified)/"
+                    + "\(a.counts.active) vs batched \(b.counts.copied)/\(b.counts.verified)/\(b.counts.active)")
+        check(a.read == b.read && a.write == b.write,
+              "batched delivery credits the same read/write bytes (stats graph)",
+              detail: "one-at-a-time r/w \(a.read)/\(a.write) vs batched \(b.read)/\(b.write)")
+        check(a.read == Int64(eqCount) * 4096 * 2 && a.write == Int64(eqCount) * 4096,
+              "read/write totals match the work actually described",
+              detail: "read \(a.read) (expected \(Int64(eqCount) * 4096 * 2)), "
+                    + "write \(a.write) (expected \(Int64(eqCount) * 4096))")
+        check(a.tally.unverified == b.tally.unverified && a.tally.verifying == b.tally.verifying,
+              "batched delivery leaves the same API tally")
+        check(b.current == batchSequence.last?.item.id,
+              "a batch leaves `currentItemID` on the last file it touched (auto-scroll target)")
+
         // Performance regression guard.
         //
         // Per-file update cost must NOT grow with the number of files in the job. It used to:

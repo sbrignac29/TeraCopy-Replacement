@@ -30,7 +30,7 @@ final class ProgressPump: @unchecked Sendable {
 
     private let delegate: TransferEngineDelegate
     private let lock = NSLock()
-    private var queue: [(index: Int, item: FileItem)] = []
+    private var queue: [ItemUpdate] = []
     private var lastPosition: [Int: Int] = [:]
     private var pending: TransferProgress?
     private var task: Task<Void, Never>?
@@ -68,7 +68,7 @@ final class ProgressPump: @unchecked Sendable {
            queue[position].item.status == item.status || queue.count >= Self.softCap {
             queue[position].item = item
         } else {
-            queue.append((index, item))
+            queue.append(ItemUpdate(index: index, item: item))
             lastPosition[index] = queue.count - 1
         }
     }
@@ -99,10 +99,10 @@ final class ProgressPump: @unchecked Sendable {
 
     /// Final flush, then stops the pump.
     ///
-    /// The in-flight drain is awaited, not just cancelled. `drain()` awaits the delegate once
-    /// per queued file, and in the app that delegate is on the main actor — so when the main
-    /// actor is busy (SwiftUI diffing the file list), a drain that started moments before the
-    /// job ended can still be waiting its turn here. Returning without it meant those
+    /// The in-flight drain is awaited, not just cancelled. `drain()` awaits the delegate, and
+    /// in the app that delegate is on the main actor — so when the main actor is busy (SwiftUI
+    /// diffing the file list), a drain that started moments before the job ended can still be
+    /// waiting its turn here. Returning without it meant those
     /// deliveries landed after `QueueViewModel` had already torn the run down and cleared
     /// `currentJob`, which drops them: the last file stayed stuck showing "Verifying…" even
     /// though the engine had finished and verified it. Shutdown has to mean everything was
@@ -113,12 +113,11 @@ final class ProgressPump: @unchecked Sendable {
         running?.cancel()
         await running?.value
         await drain(waitForTurn: true)
-        if Self.diag { FileHandle.standardError.write((Self.diagReport()+"\n").data(using:.utf8)!) }
     }
 
     /// Synchronous by design: taking a lock inside an async function is a Swift 6 error, and
     /// there is no reason to hold it across the delegate calls anyway.
-    private func takeAll() -> (items: [(index: Int, item: FileItem)], progress: TransferProgress?) {
+    private func takeAll() -> (items: [ItemUpdate], progress: TransferProgress?) {
         lock.lock()
         defer { lock.unlock() }
         let taken = queue
@@ -142,8 +141,8 @@ final class ProgressPump: @unchecked Sendable {
 
     /// Delivers queued updates, strictly one pass at a time.
     ///
-    /// `takeAll()` is atomic, but what follows it is not: a pass awaits the delegate once per
-    /// file, and in the app that delegate is on the main actor. Three callers can start a pass
+    /// `takeAll()` is atomic, but what follows it is not: a pass awaits the delegate, and in
+    /// the app that delegate is on the main actor. Three callers can start a pass
     /// — the background task, `flush()` at a phase boundary, and `shutdown()` — and two of
     /// them overlapping meant their awaits interleaved however the main actor happened to
     /// resume them. Updates then reached the delegate out of order, and a stale `.copying`
@@ -173,41 +172,10 @@ final class ProgressPump: @unchecked Sendable {
         }
     }
 
-    // TEMP DIAGNOSTIC
-    static let diag = ProcessInfo.processInfo.environment["VERICOPY_PUMP_DIAG"] != nil
-    static let diagLock = NSLock()
-    nonisolated(unsafe) static var diagDeliveries = 0
-    nonisolated(unsafe) static var diagAwaitTotal: Double = 0
-    nonisolated(unsafe) static var diagPasses = 0
-    nonisolated(unsafe) static var diagPassItemsMax = 0
-    nonisolated(unsafe) static var diagFirst: Date?
-    static func diagReport() -> String {
-        diagLock.withLock {
-            let span = diagFirst.map { Date().timeIntervalSince($0) } ?? 0
-            return String(format: "PUMPDIAG deliveries=%d passes=%d maxPassItems=%d awaitTotal=%.2fs perAwait=%.3fms span=%.2fs",
-                          diagDeliveries, diagPasses, diagPassItemsMax, diagAwaitTotal,
-                          diagAwaitTotal / Double(max(diagDeliveries,1)) * 1000, span)
-        }
-    }
-
     private func deliverOnce() async {
         let (items, progress) = takeAll()
-        if Self.diag {
-            Self.diagLock.withLock {
-                if Self.diagFirst == nil { Self.diagFirst = Date() }
-                Self.diagPasses += 1
-                Self.diagPassItemsMax = max(Self.diagPassItemsMax, items.count)
-            }
-        }
-        for entry in items {
-            if Self.diag {
-                let t = Date()
-                await delegate.engineDidUpdate(item: entry.item, at: entry.index)
-                let dt = Date().timeIntervalSince(t)
-                Self.diagLock.withLock { Self.diagDeliveries += 1; Self.diagAwaitTotal += dt }
-            } else {
-                await delegate.engineDidUpdate(item: entry.item, at: entry.index)
-            }
+        if !items.isEmpty {
+            await delegate.engineDidUpdate(batch: items)
         }
         if let progress {
             await delegate.engineDidUpdateProgress(progress)

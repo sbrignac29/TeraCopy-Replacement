@@ -232,12 +232,6 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         job.currentItemID = nil
         job.settleSpeeds()
         job.flushUIRefresh() // show the final per-file results immediately
-        if Self.diag {
-            FileHandle.standardError.write((String(format: "VMDIAG insideTotal=%.2fs count=%d perCall=%.3fms",
-                         diagInsideTotal, diagInsideCount,
-                         diagInsideTotal / Double(max(diagInsideCount,1)) * 1000)+"\n").data(using:.utf8)!)
-            diagInsideTotal = 0; diagInsideCount = 0
-        }
         if let fatal = summary.fatalError {
             alertMessage = "\(job.name): \(fatal)"
         }
@@ -473,23 +467,19 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
 
     // MARK: - TransferEngineDelegate (routes to the running job)
 
-    // TEMP DIAGNOSTIC
-    static let diag = ProcessInfo.processInfo.environment["VERICOPY_PUMP_DIAG"] != nil
-    var diagInsideTotal: Double = 0
-    var diagInsideCount = 0
-
     func engineDidUpdate(item: FileItem, at index: Int) async {
-        guard let job = currentJob, job.items.indices.contains(index) else { return }
-        if Self.diag {
-            let t = Date()
-            job.updateItem(item, at: index)
-            diagInsideTotal += Date().timeIntervalSince(t)
-            diagInsideCount += 1
-            return
-        }
+        guard let job = currentJob else { return }
         // O(1) update + coalesced UI refresh. Assigning to `job.items[index]` here would
         // copy the whole array on every call — the cause of the small-file slowdown.
         job.updateItem(item, at: index)
+    }
+
+    /// The call the pump actually makes: one hop onto the main actor for a whole delivery
+    /// pass, however many files it covers. Taking these one at a time cost a display frame
+    /// each, which is what made a 1,200-file job report "copying" for the best part of a
+    /// minute after the bytes had landed.
+    func engineDidUpdate(batch: [ItemUpdate]) async {
+        currentJob?.applyUpdates(batch)
     }
 
     /// Unused: the engine reports through `engineDidUpdateProgress`. Kept because it is part

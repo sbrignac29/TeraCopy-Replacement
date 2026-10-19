@@ -1439,6 +1439,96 @@ await {
 }()
 
 // ============================================================
+print("== A delivery pass reaches the delegate as one batch ==")
+await {
+    /// Records the shape of the hand-off, not just its contents: how many times the delegate
+    /// was called, and how many file updates arrived per call.
+    ///
+    /// The point of the batch callback is that one call carries a whole pass. Each call is a
+    /// hop onto the delegate's actor, and when that actor is the main one with a run loop on
+    /// it, a hop costs a display frame — so a 1,200-file job delivered one update per call
+    /// spent 57 s doing 0.2 s of work, and reported "copying" for most of a minute after the
+    /// bytes had landed. This delegate is deliberately slow, like a real UI, so that updates
+    /// pile up between passes and the batching is actually exercised.
+    final class BatchRecordingDelegate: TransferEngineDelegate, @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var calls = 0
+        private(set) var updates = 0
+        private(set) var largestBatch = 0
+        private(set) var singleItemCalls = 0
+        private(set) var outOfOrder: [Int] = []
+        private var lastStatus: [Int: ItemStatus] = [:]
+
+        func engineDidUpdate(batch: [ItemUpdate]) async {
+            try? await Task.sleep(nanoseconds: 8_000_000) // a slow delegate, like the main actor
+            lock.withLock {
+                calls += 1
+                updates += batch.count
+                largestBatch = max(largestBatch, batch.count)
+                for update in batch {
+                    let previous = lastStatus[update.index]
+                    let wasTerminal = previous == .done || previous == .doneNoVerify
+                        || previous == .failed || previous == .skipped
+                    let nowTerminal = update.item.status == .done || update.item.status == .doneNoVerify
+                        || update.item.status == .failed || update.item.status == .skipped
+                    if wasTerminal && !nowTerminal { outOfOrder.append(update.index) }
+                    lastStatus[update.index] = update.item.status
+                }
+            }
+        }
+
+        /// Must never be reached: the pump delivers through the batch callback, so anything
+        /// arriving here means delivery went back to one hop per file.
+        func engineDidUpdate(item: FileItem, at index: Int) async {
+            lock.withLock { singleItemCalls += 1 }
+        }
+        func engineDidUpdateOverall(bytesDone: Int64, totalBytes: Int64) async {}
+        func engineResolveConflict(item: FileItem, existingURL: URL) async -> ConflictResolution {
+            ConflictResolution(choice: .skip, applyToAll: true)
+        }
+        func engineDidUpdateProgress(_ progress: TransferProgress) async {}
+
+        var settledCount: Int { lock.withLock { lastStatus.values.filter { $0 == .done }.count } }
+    }
+
+    let src = try! makeTempDir("batch-src")
+    for i in 0..<600 {
+        try! randomData(20_000).write(to: src.appendingPathComponent(String(format: "b%03d.bin", i)))
+    }
+    let dest = try! makeTempDir("batch-dest")
+    let plan = SourceScanner.scan(sources: [src])
+    let delegate = BatchRecordingDelegate()
+    let summary = await TransferEngine().run(plan: plan, mode: .copy, algorithm: .sha256,
+                                             destinationRoot: dest, verification: .perFile,
+                                             delegate: delegate)
+
+    check(summary.succeeded == plan.items.count && summary.failed == 0,
+          "batched run completed cleanly",
+          detail: "succeeded \(summary.succeeded)/\(plan.items.count), failed \(summary.failed)")
+    check(delegate.singleItemCalls == 0,
+          "the pump delivers through the batch callback, not one hop per file",
+          detail: "\(delegate.singleItemCalls) single-item call(s)")
+    check(delegate.updates >= plan.items.count,
+          "every file was reported at least once",
+          detail: "\(delegate.updates) updates for \(plan.items.count) files")
+    check(delegate.largestBatch > 1,
+          "passes really do carry more than one file",
+          detail: "largest batch \(delegate.largestBatch)")
+    // The ratio is the whole point: hops are what cost, so there must be far fewer of them
+    // than there are updates. Four is a loose floor — the app measured ~190 updates per call.
+    check(delegate.calls * 4 <= delegate.updates,
+          "far fewer delegate hops than file updates",
+          detail: "\(delegate.calls) calls for \(delegate.updates) updates "
+                + "(\(delegate.updates / max(delegate.calls, 1)) per call)")
+    check(delegate.outOfOrder.isEmpty,
+          "batching keeps updates in order — no file goes backwards from a finished state",
+          detail: "re-opened indices \(delegate.outOfOrder)")
+    check(delegate.settledCount == plan.items.count,
+          "every file's last delivered status is the finished one",
+          detail: "\(delegate.settledCount)/\(plan.items.count) ended .done")
+}()
+
+// ============================================================
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")

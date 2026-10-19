@@ -208,8 +208,8 @@ already finished.
 
 **Cancel is a request, not a guarantee** — read the status afterwards rather than assuming.
 It stops the job at the next file boundary, so a job that was already finishing will
-complete normally and report `verified`. See the lag note below: on a job of many files the
-work can be done well before the API says so, and a cancel sent then does nothing.
+complete normally and report `verified`. Small jobs finish fast enough that this is a real
+possibility; the status you read back is the authority on what happened.
 
 What a cancel leaves behind:
 
@@ -281,7 +281,7 @@ Branch on `error`; show `message`. The codes are stable, the prose is not.
 | `job_not_cancellable` | 409 | Job already finished |
 | `request_too_large` | 413 | Request body over 64 KB |
 
-## Polling, and a lag you should know about
+## Polling
 
 HTTP cannot push, so the dashboard asks. **Every 1–2 seconds while a job is active** is
 plenty.
@@ -289,23 +289,26 @@ plenty.
 Stop polling once `status` is `verified`, `failed`, `cancelled` or `completed_unverified`;
 those are terminal and will never change.
 
-**On jobs with many files, the reported progress lags the real work — substantially.** The
-figures are driven by VeriCopy's own UI update path, and rendering a long file list is slow.
-Measured on this machine with 1,200 small files: the transfer itself was finished in about
-three seconds, but the API still reported `copying` with a climbing file count for roughly
-another forty-five seconds before settling on `verified`. The same job run without the
-window took 1.1 seconds end to end.
+**What you read is current.** The figures come from VeriCopy's own live state, which now
+tracks the work rather than trailing it: progress is delivered to the UI in batches about
+fifteen times a second, so a poll is at worst a fraction of a second behind the bytes.
+Measured on this machine with 1,200 small files: the files finished landing at 0.8 s and the
+API reported `verified` at 1.4 s. The same job run headless, with no window at all, takes
+0.7 s — so the window costs well under a second, on any job size.
 
-What this means for the dashboard:
+- **Counts are a reading, not a floor.** `filesCopied` and `filesVerified` are what has
+  actually happened, within the polling interval.
+- **`finishedAt` is when the job finished.**
+- **A cancel takes effect promptly.** `POST /api/jobs/:id/cancel` reaches a terminal status
+  in well under a second; on a 5,000-file job it was measured at 0.3 s, with the remaining
+  files genuinely not copied.
+- **Terminal status and final counts are accurate.** Trust the end state, as before.
 
-- **Terminal status and final counts are accurate.** Trust the end state.
-- **Mid-job counts are a floor, not a reading.** More has happened than the numbers say.
-- **`finishedAt` can be well after the bytes actually landed.**
-- **A cancel may do nothing** because the work is already done, even though the status still
-  says `copying`.
-
-This is a pre-existing VeriCopy UI performance issue, not something the API introduces, and
-it is worth fixing separately. Few-file jobs are unaffected.
+If you are reading an older copy of this document: there used to be a large lag here —
+roughly 45 seconds on a 1,200-file job, during which counts climbed long after the transfer
+was over and a cancel appeared to do nothing. That was a VeriCopy UI issue (each per-file
+update was handed to the main thread on its own, costing a display frame apiece) and it is
+fixed. Mid-job counts no longer need to be treated as a lower bound.
 
 ## Notes for the Java side
 

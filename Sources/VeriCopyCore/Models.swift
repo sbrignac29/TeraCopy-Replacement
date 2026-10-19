@@ -143,12 +143,38 @@ public struct TransferProgress: Sendable {
     }
 }
 
+/// One file's new state, as handed to the delegate.
+public struct ItemUpdate: Sendable {
+    /// Position in the plan's item list.
+    public var index: Int
+    public var item: FileItem
+
+    public init(index: Int, item: FileItem) {
+        self.index = index
+        self.item = item
+    }
+}
+
 /// Receives engine progress. All methods are async so the UI can live on the main actor.
 ///
 /// Progress callbacks are delivered from a pump task at roughly 15 Hz, not from the copy loop —
 /// a slow delegate slows the display, never the transfer.
 public protocol TransferEngineDelegate: AnyObject {
     func engineDidUpdate(item: FileItem, at index: Int) async
+    /// A whole delivery pass at once, in order.
+    ///
+    /// This is the call the pump actually makes; the single-item method above is the unit of
+    /// meaning, not the unit of delivery. The difference matters because every one of these
+    /// calls is a hop onto the delegate's actor, and when that actor is the main one with a
+    /// run loop on it, the hop costs a display frame — the main queue empties between
+    /// awaits, so the run loop advances before servicing the next. Measured on 1,200 small
+    /// files: 3,601 updates delivered one await apiece took 57.5 s, of which 57.3 s was hop
+    /// overhead at a flat 16 ms each, while the work inside the delegate totalled 0.2 s.
+    /// Handing the pass over whole makes that one hop instead of thousands.
+    ///
+    /// The default implementation replays the batch through `engineDidUpdate(item:at:)`, so a
+    /// delegate that does not care keeps working unchanged.
+    func engineDidUpdate(batch: [ItemUpdate]) async
     func engineDidUpdateOverall(bytesDone: Int64, totalBytes: Int64) async
     func engineResolveConflict(item: FileItem, existingURL: URL) async -> ConflictResolution
     /// Called once when the deferred (end-of-job) verification pass begins. Purely a label:
@@ -160,6 +186,12 @@ public protocol TransferEngineDelegate: AnyObject {
 
 public extension TransferEngineDelegate {
     func engineDidBeginVerificationPhase(fileCount: Int, totalBytes: Int64) async {}
+
+    func engineDidUpdate(batch: [ItemUpdate]) async {
+        for update in batch {
+            await engineDidUpdate(item: update.item, at: update.index)
+        }
+    }
 
     /// Keeps delegates written against the original byte-counting callback working unchanged.
     func engineDidUpdateProgress(_ progress: TransferProgress) async {

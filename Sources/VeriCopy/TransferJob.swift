@@ -225,10 +225,18 @@ final class TransferJob: ObservableObject, Identifiable {
         statusCounts = counts
     }
 
-    /// The engine's per-file update path: O(1) element write, O(1) count delta, and a
-    /// coalesced UI refresh. This is the hot path for a job of many small files.
-    func updateItem(_ item: FileItem, at index: Int) {
-        guard items.indices.contains(index) else { return }
+    /// Folds one item's new state into the model: O(1) element write, O(1) count delta, and
+    /// the throughput accounting the stats view reads.
+    ///
+    /// Deliberately does *not* touch `currentItemID` or ask for a refresh. Those are once-per-
+    /// delivery concerns, not once-per-file ones, and `currentItemID` is `@Published` — so
+    /// setting it here would put an un-coalesced `objectWillChange` on a path that runs
+    /// thousands of times per job. The two entry points below do each exactly once.
+    ///
+    /// Returns false for an index outside `items`, so a caller can tell nothing was applied.
+    @discardableResult
+    private func applyItem(_ item: FileItem, at index: Int) -> Bool {
+        guard items.indices.contains(index) else { return false }
         let previous = items[index].status
         // Bypass the `items` didSet (which would trigger a full recount) — the delta below
         // keeps the totals correct in O(1).
@@ -236,8 +244,39 @@ final class TransferJob: ObservableObject, Identifiable {
             items[index] = item
         }
         applyCountDelta(from: previous, to: item.status)
-        currentItemID = item.id
         recordItemActivity(item)
+        return true
+    }
+
+    /// The engine's per-file update path: one item, then a coalesced UI refresh.
+    func updateItem(_ item: FileItem, at index: Int) {
+        guard applyItem(item, at: index) else { return }
+        currentItemID = item.id
+        notifyUISoon()
+    }
+
+    /// A whole delivery pass at once. This is the hot path for a job of many small files.
+    ///
+    /// The engine's pump hands over everything it has accumulated in one call, and the point
+    /// of taking it in one call is that this method runs once per pass rather than once per
+    /// file: one hop onto the main actor, one `currentItemID` publish, one refresh request.
+    /// Delivering the same updates one at a time cost a display frame apiece — 16 ms, for
+    /// 0.056 ms of actual work — because the main queue drains between awaits and lets the
+    /// run loop get in front of the next one.
+    ///
+    /// Items are applied in order, so the per-file statuses, the counts and the read/write
+    /// series all see exactly the sequence they saw before.
+    func applyUpdates(_ updates: [ItemUpdate]) {
+        var lastTouched: UUID?
+        for update in updates {
+            if applyItem(update.item, at: update.index) {
+                lastTouched = update.item.id
+            }
+        }
+        // The most recently touched file — what auto-scroll follows and the row highlight
+        // marks. Intermediate values within one pass were never on screen for a frame.
+        guard let lastTouched else { return }
+        currentItemID = lastTouched
         notifyUISoon()
     }
 
