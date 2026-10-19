@@ -1273,6 +1273,358 @@ do {
           "same-sized observations never yield a negative estimate")
 }
 
+// A small deterministic generator (SplitMix64), so the estimator tests see the same "drive"
+// on every run and a failure can be reproduced.
+struct TestRNG {
+    var state: UInt64
+    init(_ seed: UInt64) { state = seed }
+
+    mutating func next() -> UInt64 {
+        state = state &+ 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+    mutating func unit() -> Double { Double(next() >> 11) / 9_007_199_254_740_992.0 }
+    /// Roughly bell-shaped, mean 0, standard deviation `spread`.
+    mutating func noise(_ spread: Double) -> Double {
+        let sum = unit() + unit() + unit() + unit()
+        return (sum - 2.0) * spread * 1.7320508
+    }
+    mutating func between(_ low: Int, _ high: Int) -> Int {
+        low + Int(unit() * Double(high - low + 1))
+    }
+}
+
+let mebibyte = 1_048_576
+let gibibyte = 1_073_741_824
+
+/// How long one file takes on a drive with the given speed and per-file cost, with the kind of
+/// timing noise a real one has.
+func simulatedSeconds(_ rng: inout TestRNG, bytes: Int, bytesPerSecond: Double, fixed: Double) -> Double {
+    let streaming = Double(bytes) / bytesPerSecond * (1 + rng.noise(0.06))
+    return max(streaming + fixed + rng.noise(0.002), 0.0005)
+}
+
+print("== Time estimator keeps what each kind of file taught it ==")
+do {
+    let truth = 250.0 * Double(mebibyte)
+    let fixed = 0.012
+    func rate(_ bytesPerSecond: Double) -> String {
+        String(format: "%.0f MiB/s", bytesPerSecond / Double(mebibyte))
+    }
+
+    // Ten masters, then three thousand sidecars. The estimate used to forget by file, so a few
+    // hundred sidecars erased every master it had seen and the rate was then read off timing
+    // noise: it came out an order of magnitude too low.
+    var rng = TestRNG(11)
+    var estimator = TransferEstimator()
+    for _ in 0..<10 {
+        let size = rng.between(1 * gibibyte, 6 * gibibyte)
+        estimator.record(phase: .copy, bytes: Int64(size),
+                         seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: fixed))
+    }
+    for _ in 0..<3000 {
+        let size = rng.between(4_000, 32_000)
+        estimator.record(phase: .copy, bytes: Int64(size),
+                         seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: fixed))
+    }
+    let afterSidecars = estimator.bytesPerSecond(.copy)
+    check(abs(afterSidecars - truth) / truth < 0.15,
+          "3,000 sidecars leave the learned throughput intact",
+          detail: "\(rate(afterSidecars)) vs \(rate(truth))")
+    check(abs(estimator.secondsPerFile(.copy) - fixed) < 0.003,
+          "...and teach the per-file cost",
+          detail: String(format: "%.1f ms vs 12 ms", estimator.secondsPerFile(.copy) * 1000))
+
+    // The reverse: a run of masters says nothing about per-file cost, so it must not be read
+    // off the jitter in multi-second timings. It used to come out as zero, so that sidecars
+    // still to come were costed as free — and, right after a run of sidecars, as most of a second.
+    rng = TestRNG(12)
+    estimator = TransferEstimator()
+    for _ in 0..<25 {
+        let size = rng.between(1 * gibibyte, 6 * gibibyte)
+        estimator.record(phase: .copy, bytes: Int64(size),
+                         seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: fixed))
+    }
+    check(estimator.secondsPerFile(.copy) > 0.004 && estimator.secondsPerFile(.copy) < 0.030,
+          "25 masters leave the per-file cost near its prior — not clamped to zero, not inflated",
+          detail: String(format: "%.1f ms", estimator.secondsPerFile(.copy) * 1000))
+    let sidecarTail = estimator.secondsRemaining(copyBytes: 0, copyFiles: 6000,
+                                                 verifyBytes: 0, verifyFiles: 0)
+    check(sidecarTail > 20 && sidecarTail < 240,
+          "...so 6,000 sidecars still to come are neither free nor minutes",
+          detail: String(format: "%.0f s", sidecarTail))
+
+    // A card whose first folder is metadata: sidecars, then the masters, then sidecars again.
+    // An estimator that forgets by file loses everything it learned about sidecars while the
+    // masters go by, and costs the sidecars still to come wrongly — by tens of percent, in
+    // either direction depending on the draw.
+    rng = TestRNG(22)
+    estimator = TransferEstimator()
+    var card: [Int] = []
+    for _ in 0..<3000 { card.append(rng.between(4_000, 32_000)) }
+    for _ in 0..<30 { card.append(rng.between(1 * gibibyte, 6 * gibibyte)) }
+    for _ in 0..<3000 { card.append(rng.between(4_000, 32_000)) }
+    var cardTook: [Double] = []
+    for size in card {
+        cardTook.append(simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: fixed))
+    }
+    let cut = 3000 + 25
+    for index in 0..<cut {
+        estimator.record(phase: .copy, bytes: Int64(card[index]), seconds: cardTook[index])
+    }
+    let cardPredicted = estimator.secondsRemaining(copyBytes: Int64(card[cut...].reduce(0, +)),
+                                                   copyFiles: card.count - cut,
+                                                   verifyBytes: 0, verifyFiles: 0)
+    let cardActual = cardTook[cut...].reduce(0, +)
+    check(abs(cardPredicted - cardActual) / cardActual < 0.10,
+          "after the masters, the sidecars still to come are predicted within 10%",
+          detail: String(format: "predicted %.0f s, took %.0f s", cardPredicted, cardActual))
+
+    // Interleaved masters and sidecars, as a camera card is: predict the second half from the
+    // first.
+    rng = TestRNG(13)
+    estimator = TransferEstimator()
+    var queue: [Int] = []
+    for _ in 0..<45 {
+        queue.append(rng.between(1 * gibibyte, 8 * gibibyte))
+        queue.append(rng.between(4_000, 32_000))
+    }
+    var took: [Double] = []
+    for size in queue {
+        took.append(simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: fixed))
+    }
+    let middle = queue.count / 2
+    for index in 0..<middle {
+        estimator.record(phase: .copy, bytes: Int64(queue[index]), seconds: took[index])
+    }
+    let predicted = estimator.secondsRemaining(copyBytes: Int64(queue[middle...].reduce(0, +)),
+                                               copyFiles: queue.count - middle,
+                                               verifyBytes: 0, verifyFiles: 0)
+    let actual = took[middle...].reduce(0, +)
+    check(abs(predicted - actual) / actual < 0.12,
+          "the first half of a mixed queue predicts the second within 12%",
+          detail: String(format: "predicted %.0f s, took %.0f s", predicted, actual))
+}
+
+print("== Time estimator: outliers are trimmed, regime changes are not ==")
+do {
+    let truth = 250.0 * Double(mebibyte)
+    let fixed = 0.012
+    var rng = TestRNG(14)
+    var estimator = TransferEstimator()
+    for _ in 0..<30 {
+        let size = rng.between(2 * gibibyte, 5 * gibibyte)
+        estimator.record(phase: .copy, bytes: Int64(size),
+                         seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: fixed))
+    }
+    let steady = estimator.bytesPerSecond(.copy)
+    // One file that took ten times as long — the machine went to sleep, Spotlight woke up.
+    estimator.record(phase: .copy, bytes: Int64(3 * gibibyte), seconds: 10 * Double(3 * gibibyte) / truth)
+    let afterStall = estimator.bytesPerSecond(.copy)
+    check(abs(afterStall - steady) / steady < 0.25,
+          "one file that took ten times as long barely moves the rate",
+          detail: String(format: "%.0f → %.0f MiB/s", steady / Double(mebibyte), afterStall / Double(mebibyte)))
+
+    // A drive that really has become three times slower is not an outlier.
+    let slow = 80.0 * Double(mebibyte)
+    for _ in 0..<4 {
+        let size = rng.between(2 * gibibyte, 5 * gibibyte)
+        estimator.record(phase: .copy, bytes: Int64(size),
+                         seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: slow, fixed: fixed))
+    }
+    let shifted = estimator.bytesPerSecond(.copy)
+    check(abs(shifted - slow) / slow < 0.30,
+          "four files in a row at 80 MiB/s are believed",
+          detail: String(format: "%.0f MiB/s", shifted / Double(mebibyte)))
+}
+
+print("== Time estimator learns from a file that is still running ==")
+do {
+    let tenGiB = Int64(10 * gibibyte)
+    let nothingYet = TransferEstimator().secondsRemaining(copyBytes: tenGiB, copyFiles: 1,
+                                                          verifyBytes: 0, verifyFiles: 0)
+    func withEvidence(bytes: Int, seconds: TimeInterval) -> TimeInterval {
+        TransferEstimator().secondsRemaining(
+            copyBytes: tenGiB, copyFiles: 1, verifyBytes: 0, verifyFiles: 0,
+            copyInFlight: TransferEstimator.InFlight(bytes: Int64(bytes), seconds: seconds))
+    }
+    let crawling = withEvidence(bytes: 500 * mebibyte, seconds: 10)       // 50 MiB/s
+    check(crawling > 1.8 * nothingYet,
+          "a file running at 50 MiB/s pulls the estimate up before it finishes",
+          detail: String(format: "%.0f s → %.0f s", nothingYet, crawling))
+    let flying = withEvidence(bytes: 3_000 * mebibyte, seconds: 10)       // 300 MiB/s
+    check(flying < 0.8 * nothingYet,
+          "a file running at 300 MiB/s pulls it down",
+          detail: String(format: "%.0f s → %.0f s", nothingYet, flying))
+    check(withEvidence(bytes: 500 * mebibyte, seconds: 0.5) == nothingYet,
+          "evidence younger than a second is ignored")
+    check(TransferEstimator().secondsRemaining(copyBytes: tenGiB, copyFiles: 1,
+                                               verifyBytes: 0, verifyFiles: 0) == nothingYet,
+          "in-flight evidence is used for one answer and not remembered")
+}
+
+print("== Time estimator: no estimate until the weighty parts have been seen ==")
+do {
+    let truth = 250.0 * Double(mebibyte)
+    let tenGiB = Int64(10 * gibibyte)
+    func isGrounded(_ estimator: TransferEstimator, copyBytes: Int64, copyFiles: Int,
+                    verifyBytes: Int64 = 0, verifyFiles: Int = 0,
+                    copyInFlight: TransferEstimator.InFlight? = nil) -> Bool {
+        estimator.forecast(copyBytes: copyBytes, copyFiles: copyFiles,
+                           verifyBytes: verifyBytes, verifyFiles: verifyFiles,
+                           copyInFlight: copyInFlight).isGrounded
+    }
+
+    check(!isGrounded(TransferEstimator(), copyBytes: tenGiB, copyFiles: 1),
+          "a fresh estimator is not grounded for 10 GiB of copying")
+
+    // A card that opens with thousands of sidecars: the job has no idea how fast its masters go,
+    // and an estimate dominated by them gets revised by large factors the moment the first is seen.
+    var rng = TestRNG(18)
+    var sidecarsOnly = TransferEstimator()
+    for _ in 0..<3000 {
+        let size = rng.between(4_000, 32_000)
+        sidecarsOnly.record(phase: .copy, bytes: Int64(size),
+                            seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: 0.012))
+    }
+    check(!isGrounded(sidecarsOnly, copyBytes: tenGiB, copyFiles: 5),
+          "3,000 sidecars alone do not ground an estimate whose remaining cost is masters")
+    check(isGrounded(sidecarsOnly, copyBytes: tenGiB, copyFiles: 5,
+                     copyInFlight: TransferEstimator.InFlight(bytes: Int64(500 * mebibyte), seconds: 10)),
+          "...until a master has been running for a few seconds")
+
+    var mastersOnly = TransferEstimator()
+    for _ in 0..<3 {
+        let size = rng.between(2 * gibibyte, 5 * gibibyte)
+        mastersOnly.record(phase: .copy, bytes: Int64(size),
+                           seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: 0.012))
+    }
+    check(isGrounded(mastersOnly, copyBytes: tenGiB, copyFiles: 20),
+          "once masters have been seen, a few unseen sidecars do not hold the estimate back")
+    check(!isGrounded(mastersOnly, copyBytes: 0, copyFiles: 6_000),
+          "...but a remainder that is almost all unseen sidecars does")
+    check(isGrounded(mastersOnly, copyBytes: 0, copyFiles: 0, verifyBytes: tenGiB),
+          "read-back borrows from the copy phase it follows")
+
+    let calibrated = TransferEstimator(restoring: mastersOnly.snapshot)
+    check(isGrounded(calibrated, copyBytes: tenGiB, copyFiles: 5_000, verifyBytes: tenGiB, verifyFiles: 5_000),
+          "an estimator calibrated on this destination by an earlier job is grounded from the start")
+    check(isGrounded(TransferEstimator(), copyBytes: 0, copyFiles: 0),
+          "nothing left to do is trivially grounded")
+    check(mastersOnly.secondsRemaining(copyBytes: tenGiB, copyFiles: 20, verifyBytes: 0, verifyFiles: 0)
+          == mastersOnly.forecast(copyBytes: tenGiB, copyFiles: 20, verifyBytes: 0, verifyFiles: 0).seconds,
+          "the forecast and secondsRemaining give the same number")
+}
+
+print("== Time estimator: verify follows copy until it has evidence of its own ==")
+do {
+    var rng = TestRNG(15)
+    var estimator = TransferEstimator()
+    for _ in 0..<8 {
+        let size = rng.between(1 * gibibyte, 4 * gibibyte)
+        estimator.record(phase: .copy, bytes: Int64(size),
+                         seconds: simulatedSeconds(&rng, bytes: size,
+                                                   bytesPerSecond: 50.0 * Double(mebibyte), fixed: 0.012))
+    }
+    let followed = estimator.bytesPerSecond(.verify)
+    check(abs(followed - 65.0 * Double(mebibyte)) / (65.0 * Double(mebibyte)) < 0.25,
+          "on a slow drive the read-back is not still costed at the generic prior",
+          detail: String(format: "%.0f MiB/s", followed / Double(mebibyte)))
+    estimator.record(phase: .verify, bytes: Int64(2 * gibibyte), seconds: Double(2 * gibibyte) / (100.0 * Double(mebibyte)))
+    estimator.record(phase: .verify, bytes: Int64(3 * gibibyte), seconds: Double(3 * gibibyte) / (100.0 * Double(mebibyte)))
+    check(estimator.bytesPerSecond(.verify) > 85.0 * Double(mebibyte),
+          "...and then believes what it has actually seen",
+          detail: String(format: "%.0f MiB/s", estimator.bytesPerSecond(.verify) / Double(mebibyte)))
+}
+
+print("== Time estimator: read-back hidden under the next copy costs nothing ==")
+do {
+    var rng = TestRNG(16)
+    let truth = 250.0 * Double(mebibyte)
+    let readSpeed = 400.0 * Double(mebibyte)
+
+    var hidden = TransferEstimator()
+    var plain = TransferEstimator()
+    for _ in 0..<20 {
+        let size = rng.between(2 * gibibyte, 4 * gibibyte)
+        let copy = simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: 0.012)
+        let verify = simulatedSeconds(&rng, bytes: size, bytesPerSecond: readSpeed, fixed: 0.005)
+        hidden.record(phase: .copy, bytes: Int64(size), seconds: copy)
+        plain.record(phase: .copy, bytes: Int64(size), seconds: copy)
+        hidden.recordOverlappedVerify(bytes: Int64(size), seconds: verify, exposedSeconds: 0)
+        plain.record(phase: .verify, bytes: Int64(size), seconds: verify)
+    }
+    let tenGiB = Int64(10 * gibibyte)
+    let costHidden = hidden.secondsRemaining(copyBytes: 0, copyFiles: 0, verifyBytes: tenGiB, verifyFiles: 0)
+    let costPlain = plain.secondsRemaining(copyBytes: 0, copyFiles: 0, verifyBytes: tenGiB, verifyFiles: 0)
+    check(costHidden < 0.10 * costPlain,
+          "a read-back that always finished before the next copy did adds almost nothing",
+          detail: String(format: "%.1f s vs %.1f s", costHidden, costPlain))
+
+    // Masters' read-back is not hidden (the copy under it is a sidecar's, over in milliseconds);
+    // sidecars' read-back is. The two are learned separately.
+    var mixed = TransferEstimator()
+    for _ in 0..<20 {
+        let size = rng.between(2 * gibibyte, 4 * gibibyte)
+        let verify = simulatedSeconds(&rng, bytes: size, bytesPerSecond: readSpeed, fixed: 0.005)
+        mixed.record(phase: .copy, bytes: Int64(size),
+                     seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: truth, fixed: 0.012))
+        mixed.recordOverlappedVerify(bytes: Int64(size), seconds: verify, exposedSeconds: verify)
+        for _ in 0..<5 {
+            let side = rng.between(4_000, 32_000)
+            mixed.record(phase: .copy, bytes: Int64(side),
+                         seconds: simulatedSeconds(&rng, bytes: side, bytesPerSecond: truth, fixed: 0.012))
+            mixed.recordOverlappedVerify(bytes: Int64(side), seconds: 0.007, exposedSeconds: 0)
+        }
+    }
+    var unhidden = TransferEstimator()
+    for _ in 0..<20 {
+        let size = rng.between(2 * gibibyte, 4 * gibibyte)
+        unhidden.record(phase: .verify, bytes: Int64(size),
+                        seconds: simulatedSeconds(&rng, bytes: size, bytesPerSecond: readSpeed, fixed: 0.005))
+    }
+    let mastersCost = mixed.secondsRemaining(copyBytes: 0, copyFiles: 0, verifyBytes: tenGiB, verifyFiles: 0)
+    let mastersFull = unhidden.secondsRemaining(copyBytes: 0, copyFiles: 0, verifyBytes: tenGiB, verifyFiles: 0)
+    check(mastersCost > 0.7 * mastersFull,
+          "a master's read-back is still paid for in full",
+          detail: String(format: "%.1f s vs %.1f s", mastersCost, mastersFull))
+    let sidecarsCost = mixed.secondsRemaining(copyBytes: 0, copyFiles: 0, verifyBytes: 0, verifyFiles: 1000)
+    check(sidecarsCost < 2.0,
+          "...while a thousand sidecars' read-back is nearly free",
+          detail: String(format: "%.2f s", sidecarsCost))
+}
+
+print("== Time estimator survives hostile input ==")
+do {
+    var estimator = TransferEstimator()
+    var chaos = TestRNG(17)
+    let sizes: [Int64] = [0, 1, 4_000, 1 << 20, 1 << 30, 1 << 40, 1 << 55]
+    let durations: [Double] = [1e-9, 0.001, 0.5, 30, 1e6, 1e12]
+    var sane = true
+    for _ in 0..<500 {
+        let bytes = sizes[chaos.between(0, 6)]
+        let seconds = durations[chaos.between(0, 5)]
+        estimator.record(phase: .copy, bytes: bytes, seconds: seconds)
+        estimator.record(phase: .verify, bytes: bytes, seconds: seconds)
+        let exposures: [Double] = [0, seconds, seconds * 5, .nan]
+        estimator.recordOverlappedVerify(bytes: bytes, seconds: seconds,
+                                         exposedSeconds: exposures[chaos.between(0, 3)])
+        let left = estimator.secondsRemaining(
+            copyBytes: 1 << 40, copyFiles: 1_000_000, verifyBytes: 1 << 40, verifyFiles: 1_000_000,
+            copyInFlight: TransferEstimator.InFlight(bytes: bytes, seconds: seconds),
+            verifyInFlight: TransferEstimator.InFlight(bytes: bytes, seconds: seconds))
+        let rate = estimator.bytesPerSecond(.copy)
+        sane = sane && left.isFinite && left >= 0 && !rate.isNaN && rate > 0
+    }
+    check(sane, "500 absurd observations: every estimate stays finite and non-negative")
+    check(estimator.secondsRemaining(copyBytes: 2 << 30, copyFiles: 20, verifyBytes: 2 << 30, verifyFiles: 20)
+          >= estimator.secondsRemaining(copyBytes: 1 << 30, copyFiles: 10, verifyBytes: 1 << 30, verifyFiles: 10),
+          "more work never takes less time")
+}
+
 print("== Time remaining reads as a countdown, not a stopwatch ==")
 do {
     check(TimeRemaining.describe(12) == "less than a minute", "under 90 s is not given in seconds")
@@ -1287,6 +1639,86 @@ do {
     let hourish = TimeRemaining.describe(3600 + 40)
     check(!hourish.contains("s") || hourish.contains("hr") || hourish.contains("min"),
           "hour-scale estimates never show seconds", detail: hourish)
+
+    check(TimeRemaining.step(for: 100) == 30 && TimeRemaining.step(for: 700) == 60
+          && TimeRemaining.step(for: 4_000) == 300,
+          "the rounding step grows with the magnitude")
+    check(TimeRemaining.rounded(20 * 60 + 5) == 1_200, "rounded() gives the figure describe() shows")
+    check(TimeRemaining.rounded(12) == 45 && TimeRemaining.rounded(0) == 0
+          && TimeRemaining.rounded(.infinity) == 0,
+          "rounded() agrees with describe() at both ends")
+    for sample in [95.0, 140, 301, 1_250, 4_000] {
+        check(TimeRemaining.describe(TimeRemaining.rounded(sample)) == TimeRemaining.describe(sample),
+              "describing the rounded figure is the same as describing the original (\(sample) s)")
+    }
+}
+
+print("== ETA smoothing: a countdown that moves only on evidence ==")
+do {
+    func at(_ sample: Int) -> Date { Date(timeIntervalSinceReferenceDate: 1_000.0 + Double(sample) / 15.0) }
+    func elapsed(_ sample: Int) -> Double { Double(sample) / 15.0 }
+
+    // A correct estimate falls by a second every second. The countdown must fall with it,
+    // not trail behind by the filter's time constant.
+    var steady = ETASmoother()
+    var worst = 0.0
+    for sample in 0..<(15 * 120) {
+        let raw = 600.0 - elapsed(sample)
+        steady.update(raw: raw, at: at(sample))
+        worst = max(worst, abs((steady.seconds ?? .infinity) - raw))
+    }
+    check(worst < 0.01, "a steady, correct estimate counts down with no lag",
+          detail: String(format: "off by at most %.4f s", worst))
+
+    // One reading two minutes out, among hundreds that agree, is a flicker.
+    var flicker = ETASmoother()
+    var peak = 0.0
+    for sample in 0..<(15 * 60) {
+        let truth = 600.0 - elapsed(sample)
+        flicker.update(raw: truth + (sample == 450 ? 120.0 : 0.0), at: at(sample))
+        if sample > 450 { peak = max(peak, abs((flicker.seconds ?? .infinity) - truth)) }
+    }
+    check(peak < 10.0, "a single reading 120 s off moves the countdown by less than 10 s",
+          detail: String(format: "%.2f s", peak))
+
+    // A job that has really doubled its remaining time must be believed, quickly — but not at once.
+    var shifted = ETASmoother()
+    var errorAt: [Int: Double] = [:]
+    for sample in 0..<(15 * 150) {
+        let t = elapsed(sample)
+        let raw = t < 60 ? 600.0 - t : 1_200.0 - t
+        shifted.update(raw: raw, at: at(sample))
+        if [915, 975, 1_200].contains(sample) { errorAt[sample] = abs((shifted.seconds ?? 0) - raw) / raw }
+    }
+    check((errorAt[1_200] ?? 1) < 0.10,
+          "a real doubling of the estimate is followed within 20 seconds",
+          detail: String(format: "%.1f%% off after 20 s", (errorAt[1_200] ?? 1) * 100))
+    check((errorAt[915] ?? 0) > 0.30,
+          "...and is not taken on faith from a single second of it",
+          detail: String(format: "%.1f%% off after 1 s", (errorAt[915] ?? 0) * 100))
+
+    // An estimate that wobbles around a rounding boundary must not make the figure flip back up.
+    var wobbling = ETASmoother()
+    var rises = 0
+    var previous: TimeInterval?
+    for sample in 0..<(15 * 300) {
+        let base = 1_000.0 - elapsed(sample) * 0.2
+        let raw = base + ((sample / 45) % 2 == 1 ? 8.0 : -8.0)
+        wobbling.update(raw: raw, at: at(sample))
+        if let figure = wobbling.figure {
+            if let before = previous, figure > before { rises += 1 }
+            previous = figure
+        }
+    }
+    check(rises == 0, "a wobble across a rounding boundary never makes the figure go up",
+          detail: "\(rises) rises")
+
+    var cleared = ETASmoother()
+    cleared.update(raw: 300, at: at(0))
+    check(cleared.text != nil && cleared.seconds != nil, "a reading produces a countdown")
+    cleared.update(raw: nil, at: at(1))
+    check(cleared.text == nil && cleared.seconds == nil && cleared.figure == nil,
+          "no estimate clears the display")
 }
 
 print("== Progress spans copy and verification ==")

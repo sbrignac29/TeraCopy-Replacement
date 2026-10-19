@@ -180,7 +180,7 @@ The full status of one job — this is what you poll.
 | `progress` | 0.0–1.0, spanning the copy **and** the verification read-back |
 | `bytesCopied` / `bytesTotal` | bytes landed at the destination; fits a Java `long` |
 | `filesUnverified` | finished but never checksum-compared — same-volume renames, or a UI job run with verification off |
-| `secondsRemaining` | estimate, or absent while it is still warming up |
+| `secondsRemaining` | estimate, or absent while it is still warming up. The same smoothed countdown the app shows, to the second: it falls by one each second while the estimate holds and only moves faster when the job really has changed pace, so it is safe to poll and display |
 | `fatalError` | set when the job could not start at all (no free space, unreadable destination) |
 | `failedFiles` | `[{ "path", "message" }]`, populated as files fail |
 
