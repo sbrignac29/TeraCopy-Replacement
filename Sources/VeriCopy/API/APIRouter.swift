@@ -112,6 +112,22 @@ final class APIRouter {
     // MARK: - POST /api/jobs
 
     private func createJob(_ request: HTTPRequest) async -> HTTPResponse {
+        // This route is the one place where what the request *says* decides whether files are
+        // deleted afterwards, so anything in it this API does not read is refused rather than
+        // dropped. Dropping it would mean answering "move" with a copy: the caller asked for
+        // one operation, got the other, and nothing said so. Hence the three guards below —
+        // no URL parameters, no unknown fields, no `mode` that is present but unreadable.
+        //
+        // `mode` only ever travels in the JSON body. A query string here is a caller who
+        // believes they passed something ("?mode=move" is the obvious one), and routing has
+        // already ignored it.
+        if let query = request.query {
+            return .error("unexpected_query",
+                          "POST /api/jobs takes no URL parameters and did not read \"?\(query)\". "
+                          + #"Everything goes in the JSON body: {"source": …, "destination": …, "mode": "move"}."#,
+                          status: 400)
+        }
+
         // Requiring JSON is not pedantry: it is the header that forces a browser to send a
         // CORS preflight, which this server never answers. Together with the Origin check
         // above, that leaves no path for a drive-by request from a web page.
@@ -119,6 +135,45 @@ final class APIRouter {
         guard contentType.lowercased().hasPrefix("application/json") else {
             return .error("unsupported_media_type",
                           "Send Content-Type: application/json.",
+                          status: 400)
+        }
+
+        // The raw object, read before the typed decode the same way `APIConfig` reads its
+        // file. Codable cannot report a field it has no property for — it discards it — and
+        // the field most likely to be spelled wrong by a caller generating JSON from a DTO is
+        // the one that decides whether sources get deleted. An unknown field is therefore a
+        // refusal naming it, not a copy.
+        guard let object = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] else {
+            return .error("invalid_body",
+                          #"Body must be a JSON object: {"source": "/absolute/path", "destination": "/absolute/path"}."#,
+                          status: 400)
+        }
+        let knownFields: Set<String> = ["source", "destination", "mode"]
+        let unknownFields = object.keys.filter { !knownFields.contains($0) }.sorted()
+        if !unknownFields.isEmpty {
+            // Field names are case-sensitive, and "Mode"/"MODE" is a likely enough slip to
+            // be worth saying out loud rather than leaving the caller to find it.
+            let misspelled = unknownFields.filter { knownFields.contains($0.lowercased()) }
+            let hint = misspelled.isEmpty
+                ? ""
+                : " Field names are case-sensitive — did you mean "
+                    + misspelled.map { "\"\($0.lowercased())\"" }.joined(separator: ", ") + "?"
+            return .error("unknown_field",
+                          "This API does not read "
+                          + unknownFields.map { "\"\($0)\"" }.joined(separator: ", ")
+                          + ". Send only \"source\", \"destination\" and \"mode\" — a field it "
+                          + "ignored could mean copying something you asked it to move.\(hint)",
+                          status: 400)
+        }
+
+        // `String?` cannot tell an absent `mode` from one sent as null or as some other type,
+        // and they mean different things: leaving the field out is a copy, while a null or a
+        // number is a caller whose mode did not survive serialization. Only the raw object
+        // knows which happened, and a decode failure here would read as a malformed body.
+        if let value = object["mode"], !(value is String) {
+            let what = value is NSNull ? "mode was null." : "mode must be a string."
+            return .error("invalid_mode",
+                          what + #" Send "copy" or "move", or leave the field out to copy."#,
                           status: 400)
         }
 
@@ -133,7 +188,9 @@ final class APIRouter {
 
         // Absent means copy, so a caller written against the copy-only version of this API
         // keeps copying and cannot start deleting things by accident.
-        let requestedMode = (decoded.mode ?? "copy").lowercased()
+        let requestedMode = (decoded.mode ?? "copy")
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
         let transferMode: TransferMode
         switch requestedMode {
         case "copy":

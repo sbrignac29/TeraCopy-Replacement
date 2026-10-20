@@ -12,11 +12,17 @@ import VeriCopyCore
 
 // MARK: - Requests
 
+/// The whole of what `POST /api/jobs` accepts. These three field names are the contract, and
+/// `APIRouter.createJob` checks the body's raw keys against them before decoding: a field this
+/// struct has no property for would otherwise be discarded in silence, and the one most likely
+/// to be misspelled by a caller generating JSON from a DTO decides whether sources are deleted.
 struct CreateJobRequest: Decodable {
     let source: String
     let destination: String
     /// "copy" (the default when absent) or "move". Optional so a caller written against the
-    /// copy-only version of this API keeps working unchanged, and keeps copying.
+    /// copy-only version of this API keeps working unchanged, and keeps copying. Absent is
+    /// the *only* way to get that default: a `mode` that is present but unreadable — null,
+    /// a non-string, an unrecognized word — is refused rather than quietly read as "copy".
     let mode: String?
 }
 

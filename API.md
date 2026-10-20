@@ -15,7 +15,10 @@ whole question.
 > **Changed since the first version.** The status `copied_unverified` is now
 > `completed_unverified`, because it no longer only means "copied". `POST /api/jobs` takes
 > an optional `mode`, and job records carry two new fields, `mode` and `filesUnverified`.
-> A caller that omits `mode` keeps copying exactly as before.
+> A caller that omits `mode` keeps copying exactly as before. `POST /api/jobs` is now strict
+> about the rest of the request: an unknown field, a URL parameter, or a `mode` that is
+> present but unreadable is refused (`unknown_field`, `unexpected_query`, `invalid_mode`)
+> rather than run as a copy, so a move that does not reach VeriCopy intact fails loudly.
 
 ## What it can and cannot do
 
@@ -106,6 +109,20 @@ Request — both paths absolute, both inside an allowed root:
 | `source` | yes | A file or a folder |
 | `destination` | yes | A folder that must already exist |
 | `mode` | no | `"copy"` (the default when absent) or `"move"` |
+
+**These three fields are the whole request, and nothing else in it is read.** Because `mode`
+is the difference between copying a folder and deleting it afterwards, this route refuses
+anything it does not understand instead of falling back to a copy:
+
+- Any other field is `400 unknown_field`, which names it. Field names are case-sensitive, so
+  `"Mode"` is an unknown field — the response says so rather than copying.
+- A query string is `400 unexpected_query`. `mode` travels in the body only; `POST
+  /api/jobs?mode=move` does not move anything, and now says as much instead of copying.
+- A `mode` that is present but unreadable — `null`, a number, a word that is neither `copy`
+  nor `move` — is `400 invalid_mode`. Only *leaving the field out* means copy.
+
+If you are generating the body from a Java object, this is the check that catches a field
+that did not serialize under the name this API expects.
 
 Response — `202 Accepted`:
 
@@ -261,8 +278,10 @@ Branch on `error`; show `message`. The codes are stable, the prose is not.
 
 | `error` | HTTP | Cause |
 |---|---|---|
-| `invalid_body` | 400 | Body is not `{ source, destination }` |
-| `invalid_mode` | 400 | `mode` was neither `"copy"` nor `"move"` |
+| `invalid_body` | 400 | Body is not a JSON object `{ source, destination }` |
+| `invalid_mode` | 400 | `mode` was present but unreadable: `null`, not a string, or neither `"copy"` nor `"move"` |
+| `unknown_field` | 400 | Body carried a field this API does not read (named in `message`) |
+| `unexpected_query` | 400 | `POST /api/jobs` was called with URL parameters; everything goes in the body |
 | `unsupported_media_type` | 400 | Missing `Content-Type: application/json` |
 | `path_not_absolute` | 400 | A path did not start with `/` |
 | `path_not_found` | 400 | Path does not exist (drive unplugged?) |
@@ -314,6 +333,11 @@ fixed. Mid-job counts no longer need to be treated as a lower bound.
 
 - `java.net.http.HttpClient` plus Jackson covers all of this. No special configuration —
   the JSON field names are already camelCase.
+- Check the field name your serializer actually emits for `mode`. A DTO whose getter is
+  `isMove()` writes `"move"`, an enum field called `transferMode` writes `"transferMode"`,
+  and a null enum with `@JsonInclude(NON_NULL)` writes nothing at all. All three used to be
+  read as a copy; they are now `400 unknown_field` / `400 invalid_mode`, with the offending
+  name in `message`.
 - Timestamps are ISO-8601 (`2026-10-15T23:19:53Z`), which `java.time.Instant.parse` reads
   directly.
 - Set a generous read timeout on `POST /api/jobs` (see above). The other routes return
