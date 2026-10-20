@@ -16,6 +16,11 @@ import Network
 struct HTTPRequest {
     let method: String
     let path: String
+    /// The raw query string the request line carried ("mode=move"), or nil when there was
+    /// none. Routing is on the path alone — but the query is kept rather than thrown away so
+    /// that a route can *refuse* parameters it does not read. Dropping them silently is only
+    /// harmless where nothing could have depended on them; see `APIRouter.createJob`.
+    let query: String?
     let headers: [String: String]   // lowercased keys
     let body: Data
 
@@ -190,9 +195,15 @@ final class HTTPServer: @unchecked Sendable {
         let requestLine = lines.removeFirst().split(separator: " ", omittingEmptySubsequences: true)
         guard requestLine.count >= 2 else { return .malformed("Malformed request line.") }
         let method = String(requestLine[0]).uppercased()
-        // Strip any query string: none of these routes take query parameters, and keeping
-        // it would make "/api/jobs" and "/api/jobs?x=1" two different paths to the router.
-        let path = String(String(requestLine[1]).split(separator: "?", maxSplits: 1)[0])
+        // The query string is split off the path — none of these routes take parameters, and
+        // keeping it in would make "/api/jobs" and "/api/jobs?x=1" two different paths to the
+        // router — but it is carried on the request rather than discarded, so a route can say
+        // "I did not read that" instead of quietly acting as if it had never been sent.
+        let target = String(requestLine[1]).split(separator: "?", maxSplits: 1,
+                                                  omittingEmptySubsequences: false)
+        let path = String(target[0])
+        // A bare "?" with nothing after it is not a parameter, so it reads as no query at all.
+        let query: String? = target.count > 1 && !target[1].isEmpty ? String(target[1]) : nil
 
         var headers: [String: String] = [:]
         for line in lines {
@@ -208,6 +219,7 @@ final class HTTPServer: @unchecked Sendable {
         guard available >= declared else { return .needMore }
 
         let body = Data(buffer[bodyStart..<buffer.index(bodyStart, offsetBy: declared)])
-        return .complete(HTTPRequest(method: method, path: path, headers: headers, body: body))
+        return .complete(HTTPRequest(method: method, path: path, query: query,
+                                     headers: headers, body: body))
     }
 }
