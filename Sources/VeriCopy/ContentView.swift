@@ -621,7 +621,7 @@ private struct FileRow: View {
     let item: FileItem
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             HStack(spacing: 6) {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: item.sourceURL.path))
                     .resizable()
@@ -679,11 +679,11 @@ private struct StatusCell: View {
     let item: FileItem
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(alignment: .top, spacing: 5) {
             Image(systemName: icon)
                 .foregroundStyle(color)
             Text(text)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(item.status == .failed ? Color.red : Color.secondary)
         }
         .help(item.message ?? text)
