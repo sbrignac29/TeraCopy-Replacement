@@ -3,8 +3,11 @@
 A stable, native macOS replacement for TeraCopy: copy or move files with real,
 read-back checksum verification.
 
-**The app:** `VeriCopy.app` in this folder — double-click to run, or drag it to
-`/Applications`.
+**The app:** `Scripts/build_app.sh` writes `VeriCopy <version> (<build>).app` to
+this folder — double-click to run, or drag it to `/Applications`. The build number
+counts commits, so the highest is the newest, and the title bar shows the version
+and commit of the copy you're running. `VeriCopy.app` is the last bundle committed
+to git. Run one copy at a time: they share settings.
 
 ## Features
 
@@ -145,7 +148,7 @@ read-back checksum verification.
 Requires only Xcode Command Line Tools (Swift 6+):
 
 ```bash
-./Scripts/build_app.sh    # runs the test suite, builds, bundles, signs VeriCopy.app
+./Scripts/build_app.sh    # runs the test suite, builds, bundles, signs VeriCopy <version> (<build>).app
 ```
 
 ## Testing

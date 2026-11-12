@@ -67,6 +67,8 @@ struct ContentView: View {
                 ViewModePicker()
             }
         }
+        // Under the job name in the title bar, so you can tell which build is running.
+        .navigationSubtitle(AppVersion.display)
         .sheet(item: $queue.conflict) { prompt in
             ConflictSheet(prompt: prompt)
                 .environmentObject(queue)
