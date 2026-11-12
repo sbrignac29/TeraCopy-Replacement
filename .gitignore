@@ -1,0 +1,15 @@
+# Generated output. Everything here is rebuilt by `swift build` or the scripts
+# in Scripts/, so none of it belongs in git.
+
+# SwiftPM build directory (swift build / swift run / Scripts/build_app.sh).
+/.build/
+
+# Script output:
+#   build/AppIcon.iconset  intermediate PNGs from Scripts/make_icon.swift
+#                          (its real output is Resources/AppIcon.icns, which stays tracked)
+#   build/queue-test       Scripts/run_queue_test.sh
+#   build/ftp-test         Scripts/run_ftp_test.sh
+/build/
+
+# Finder metadata.
+.DS_Store
