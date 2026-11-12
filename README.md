@@ -10,7 +10,13 @@ read-back checksum verification.
 
 - **Job queue.** The sidebar lists copy jobs; each job has its own files,
   destination, mode, and verification settings. Build several jobs, then
-  **Start Queue** to run them one after another. Finished jobs stay in the
+  **Start Queue** to run them one after another. The queue stays open while it
+  runs: a job you set up mid-run (files plus a destination) joins the end of
+  the line, and jobs not yet started can be dragged into a new order (or
+  right-click ▸ Move Up/Down) without disturbing the job that is copying.
+  Pressing one job's **Copy** runs just that job, but anything you set up
+  while it copies still queues behind it; jobs that were already waiting can
+  join with **Add to Queue**. Finished jobs stay in the
   list with their complete per-file results — every file still shows its
   verified status and checksum. Jobs can also be run individually, re-run,
   or removed (right-click). **Rename any job** to label what it's copying —

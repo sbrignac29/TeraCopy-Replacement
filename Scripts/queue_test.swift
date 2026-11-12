@@ -19,6 +19,20 @@ final class MockChannel: NotificationChannel, @unchecked Sendable {
     }
 }
 
+/// Adds a job at the moment the end-of-queue notification is delivered. That is the window in
+/// which a queue that has already drained could strand a newly added job if it did not re-check.
+final class JoinAtQueueEndChannel: NotificationChannel, @unchecked Sendable {
+    let kind: NotificationChannelKind = .desktop
+    let onQueueComplete: @MainActor () -> Void
+    private var fired = false
+    init(onQueueComplete: @escaping @MainActor () -> Void) { self.onQueueComplete = onQueueComplete }
+    func deliver(_ content: NotificationContent) async {
+        guard content.title == "Queue complete", !fired else { return }
+        fired = true
+        await MainActor.run { onQueueComplete() }
+    }
+}
+
 /// Records power effects instead of performing them. This is what makes it safe to test the
 /// end-of-run state machine: `sleepSystem()` and `quitApp()` only set flags, so even a
 /// regression in the policy logic cannot sleep the test machine or kill the test process.
@@ -134,18 +148,22 @@ struct QueueTest {
         var maxCopiedSeen: [UUID: Int] = [:]
         var sawCopiedRegression = false
         var sawVerifyingActivity = false
+        // Sampled together with `queueActive`, so it says whether the Mac slept while the run
+        // was still going. Reading it after the checks below would race the 1 s countdown.
+        var sleptDuringRun = false
         var waited = 0
         while waited < 6000 { // 60 s ceiling
-            let snapshot = await MainActor.run { () -> (Bool, [UUID], [(UUID, Int, Bool)]) in
+            let snapshot = await MainActor.run { () -> (Bool, [UUID], [(UUID, Int, Bool)], Bool) in
                 let queue = QueueViewModel.shared
                 let perJob = queue.jobs.map { job -> (UUID, Int, Bool) in
                     let counts = job.statusCounts
                     let verifying = job.items.contains { $0.status == .verifying }
                     return (job.id, counts.copied, verifying)
                 }
-                return (queue.queueActive, queue.jobs.filter(\.isActive).map(\.id), perJob)
+                return (queue.queueActive, queue.jobs.filter(\.isActive).map(\.id), perJob, power.slept)
             }
-            let (active, running, perJob) = snapshot
+            let (active, running, perJob, sleptNow) = snapshot
+            if sleptNow { sleptDuringRun = true }
             if running.count > 1 { sawConcurrent = true }
             if let current = running.first, observedOrder.last != current {
                 observedOrder.append(current)
@@ -232,8 +250,8 @@ struct QueueTest {
 
         // Power wiring. The keep-awake hold must be balanced across the whole run: an
         // unbalanced depth means a leaked system-wide assertion.
-        let (depth, events, sleptDuringRun) = await MainActor.run {
-            (power.keepAwakeDepth, power.events, power.slept)
+        let (depth, events) = await MainActor.run {
+            (power.keepAwakeDepth, power.events)
         }
         check(events.contains("awake+"), "keep-awake was taken when the queue started",
               detail: "\(events)")
@@ -404,8 +422,351 @@ struct QueueTest {
               "per-file update stays fast on a 20,000-file job",
               detail: String(format: "%.5f ms/update", largeJobCost))
 
+        // Queue order, and jobs joining a run. These run last, on the shared queue, which is
+        // idle by now.
+        await checkQueueOrderRules()
+        await checkReorderChangesRunOrder(base: base)
+        await checkJoinAndReorderWhileRunning(base: base)
+        await checkJobJoiningAtQueueEnd(base: base)
+        await checkJobJoiningDuringCountdown(base: base)
+        await checkSingleJobRunTakesLaterJobs(base: base)
+        await MainActor.run { clearQueue() }
+
         print("")
         print(failures == 0 ? "ALL QUEUE TESTS PASSED" : "\(failures) QUEUE TEST(S) FAILED")
         exit(failures == 0 ? 0 : 1)
+    }
+
+    // MARK: - Queue order and jobs joining a run
+
+    static func randomBytes(_ count: Int) -> Data {
+        var data = Data(count: count)
+        data.withUnsafeMutableBytes { arc4random_buf($0.baseAddress, count) }
+        return data
+    }
+
+    /// Adds a queued job with one source file and its own destination. The scan runs in the
+    /// background, so the job becomes ready a moment later; wait for it with `waitFor`.
+    @MainActor
+    static func makeJob(named name: String, bytes: Int, in base: URL, completion: CompletionAction) -> TransferJob {
+        let fm = FileManager.default
+        let sourceDir = base.appendingPathComponent("src-\(name)")
+        let destDir = base.appendingPathComponent("dst-\(name)")
+        try! fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try! fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let file = sourceDir.appendingPathComponent("\(name).bin")
+        try! randomBytes(bytes).write(to: file)
+
+        let job = QueueViewModel.shared.newJob()
+        job.name = name
+        job.destination = destDir
+        job.verification = .perFile
+        job.completionAction = completion
+        job.addSources([file])
+        return job
+    }
+
+    /// Polls on the main actor until `condition` holds, for up to `ms` milliseconds.
+    static func waitFor(ms: Int, _ condition: @escaping @MainActor () -> Bool) async -> Bool {
+        var waited = 0
+        while waited < ms {
+            if await MainActor.run(body: condition) { return true }
+            try? await Task.sleep(nanoseconds: 2_000_000)
+            waited += 2
+        }
+        return await MainActor.run(body: condition)
+    }
+
+    /// Follows a run to its end and reports the order its jobs started in. The run counts as
+    /// over only once nothing is active, nothing is ready and nothing is scanning, and that holds
+    /// for 200 ms. A run that resumes can briefly report inactive in between, and that gap must
+    /// not end the observation.
+    static func followRun(maxMs: Int = 60_000) async -> (order: [UUID], concurrent: Bool) {
+        var order: [UUID] = []
+        var concurrent = false
+        var idleStreak = 0
+        var waited = 0
+        while waited < maxMs {
+            let (idle, running) = await MainActor.run { () -> (Bool, [UUID]) in
+                let queue = QueueViewModel.shared
+                let pending = queue.jobs.contains {
+                    $0.state == .draft && ($0.isReady || $0.scansInFlight > 0)
+                        && !queue.heldBackJobIDs.contains($0.id)
+                }
+                return (!queue.queueActive && !pending, queue.jobs.filter(\.isActive).map(\.id))
+            }
+            if running.count > 1 { concurrent = true }
+            if let current = running.first, order.last != current { order.append(current) }
+            idleStreak = idle ? idleStreak + 1 : 0
+            if idleStreak >= 25 { break }
+            try? await Task.sleep(nanoseconds: 8_000_000)
+            waited += 8
+        }
+        return (order, concurrent)
+    }
+
+    /// Empties the shared queue. A fake state set by an earlier check would block removal, so
+    /// every job is returned to draft first.
+    @MainActor
+    static func clearQueue() {
+        let queue = QueueViewModel.shared
+        for job in queue.jobs { job.state = .draft }
+        for job in queue.jobs { queue.removeJob(job) }
+    }
+
+    static func checkQueueOrderRules() async {
+        print("== Queue order rules ==")
+        await MainActor.run {
+            clearQueue()
+            let queue = QueueViewModel.shared
+            let done = queue.newJob(); done.state = .finished
+            let live = queue.newJob(); live.state = .running
+            let a = queue.newJob()
+            let b = queue.newJob()
+            let c = queue.newJob()
+            let numbers = { queue.jobs.map(\.number) }
+
+            queue.moveQueuedJobs(fromOffsets: [4], toOffset: 0)
+            check(numbers() == [done.number, live.number, c.number, a.number, b.number],
+                  "a queued job dropped to the top lands just below the running job",
+                  detail: "\(numbers())")
+
+            let before = numbers()
+            queue.moveQueuedJobs(fromOffsets: [1], toOffset: 5)
+            queue.moveQueuedJobs(fromOffsets: [0], toOffset: 5)
+            check(numbers() == before, "running and finished jobs cannot be moved")
+
+            check(!queue.canMoveQueuedJob(c, by: -1), "the first queued job cannot move above the running job")
+            check(queue.canMoveQueuedJob(c, by: 1), "the first queued job can move down")
+            queue.moveQueuedJob(c, by: 1)   // [done, live, a, c, b]
+            queue.moveQueuedJob(b, by: -1)  // [done, live, a, b, c]
+            check(numbers() == [done.number, live.number, a.number, b.number, c.number],
+                  "move up and down step through the queued jobs", detail: "\(numbers())")
+            check(!queue.canMoveQueuedJob(a, by: -1), "a queued job right under the running job cannot move up")
+            check(!queue.canMoveQueuedJob(live, by: 1), "the running job cannot move down")
+
+            // A queued job that sits above a started job cannot be dragged back above it.
+            let last = queue.jobs.removeLast()
+            queue.jobs.insert(last, at: 0)  // [c, done, live, a, b]
+            queue.moveQueuedJobs(fromOffsets: [0], toOffset: 1)
+            check(numbers() == [done.number, live.number, c.number, a.number, b.number],
+                  "a queued job dropped above a started job lands below it", detail: "\(numbers())")
+            clearQueue()
+        }
+    }
+
+    static func checkReorderChangesRunOrder(base: URL) async {
+        print("== A reordered queue runs in its new order ==")
+        await MainActor.run { clearQueue() }
+        let jobs = await MainActor.run { () -> [TransferJob] in
+            ["alpha", "bravo", "charlie"].map {
+                makeJob(named: $0, bytes: 4 * 1024 * 1024, in: base, completion: .nothing)
+            }
+        }
+        let ids = await MainActor.run { jobs.map(\.id) }
+        let ready = await waitFor(ms: 10_000) { jobs.allSatisfy(\.isReady) }
+        check(ready, "reorder scenario: all three jobs became ready")
+
+        await MainActor.run {
+            QueueViewModel.shared.moveQueuedJobs(fromOffsets: [2], toOffset: 0)  // charlie to the top
+            QueueViewModel.shared.startQueue()
+        }
+        let run = await followRun()
+        check(run.order == [ids[2], ids[0], ids[1]], "reordered jobs run in the new order",
+              detail: "order \(run.order.map { id in ids.firstIndex(of: id) ?? -1 })")
+        check(!run.concurrent, "reordered run still never overlaps two jobs")
+        let finished = await MainActor.run { jobs.allSatisfy { $0.state == .finished } }
+        check(finished, "every reordered job finished")
+        await MainActor.run { clearQueue() }
+    }
+
+    static func checkJoinAndReorderWhileRunning(base: URL) async {
+        print("== Jobs added and reordered while a job copies ==")
+        await MainActor.run { clearQueue() }
+        let first = await MainActor.run { makeJob(named: "first", bytes: 64 * 1024 * 1024, in: base, completion: .nothing) }
+        let second = await MainActor.run { makeJob(named: "second", bytes: 4 * 1024 * 1024, in: base, completion: .nothing) }
+        let third = await MainActor.run { makeJob(named: "third", bytes: 4 * 1024 * 1024, in: base, completion: .nothing) }
+        let ready = await waitFor(ms: 10_000) { first.isReady && second.isReady && third.isReady }
+        check(ready, "mid-run scenario: starting jobs became ready")
+
+        await MainActor.run { QueueViewModel.shared.startQueue() }
+        let firstRunning = await waitFor(ms: 20_000) { first.state == .running && first.progressDone > 0 }
+        check(firstRunning, "the first job is copying before anything is added")
+
+        // Added while `first` is still copying: it must join the queue, not wait for a new Start.
+        let fourth = await MainActor.run { () -> TransferJob in
+            let job = makeJob(named: "fourth", bytes: 4 * 1024 * 1024, in: base, completion: .nothing)
+            check(first.state == .running, "the fourth job was added while the first was still running")
+            return job
+        }
+        let fourthReady = await waitFor(ms: 10_000) { fourth.isReady }
+        check(fourthReady, "a job added mid-run becomes ready on its own")
+
+        await MainActor.run {
+            let queue = QueueViewModel.shared
+            let from = queue.jobs.firstIndex { $0 === fourth } ?? -1
+            let to = queue.jobs.firstIndex { $0 === second } ?? -1
+            queue.moveQueuedJobs(fromOffsets: IndexSet(integer: from), toOffset: to)  // fourth before second
+            let beforeRunningMove = queue.jobs.map(\.number)
+            queue.moveQueuedJobs(fromOffsets: IndexSet(integer: 0), toOffset: queue.jobs.count)
+            check(queue.jobs.map(\.number) == beforeRunningMove, "the copying job cannot be dragged")
+        }
+
+        let run = await followRun()
+        let ids = await MainActor.run { [first, fourth, second, third].map(\.id) }
+        check(run.order == ids, "queue runs first, then fourth (moved up), second, third",
+              detail: "order \(run.order.map { id in ids.firstIndex(of: id) ?? -1 })")
+        check(!run.concurrent, "never more than one job copying at a time")
+        let finished = await MainActor.run { [first, second, third, fourth].allSatisfy { $0.state == .finished } }
+        check(finished, "every job finished, including the one added mid-run")
+        await MainActor.run { clearQueue() }
+    }
+
+    static func checkJobJoiningAtQueueEnd(base: URL) async {
+        print("== A job added as the queue winds down is not stranded ==")
+        let power = await MainActor.run { RecordingPowerController() }
+        let hook = JoinAtQueueEndChannel {
+            _ = makeJob(named: "late", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+        }
+        await MainActor.run {
+            clearQueue()
+            let queue = QueueViewModel.shared
+            queue.powerController = power
+            queue.powerSettings = PowerSettings(defaultCompletionAction: .sleep, countdownSeconds: 1)
+            queue.notificationChannels = [hook]
+            queue.notificationSettings = NotificationSettings(desktopEnabled: true, trigger: .eachJob)
+        }
+        let early = await MainActor.run { () -> [TransferJob] in
+            [makeJob(named: "early-a", bytes: 4 * 1024 * 1024, in: base, completion: .sleep),
+             makeJob(named: "early-b", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)]
+        }
+        let earlyIDs = await MainActor.run { early.map(\.id) }
+        _ = await waitFor(ms: 10_000) { early.allSatisfy(\.isReady) }
+        await MainActor.run { QueueViewModel.shared.startQueue() }
+
+        let run = await followRun()
+        let late = await MainActor.run { QueueViewModel.shared.jobs.first { $0.name == "late" } }
+        check(late != nil, "a job was added during the queue-complete notification")
+        let lateID = await MainActor.run { late?.id }
+        check(run.order == earlyIDs + (lateID.map { [$0] } ?? []),
+              "the job added during notification ran after the queue's other jobs")
+        let lateOK = await MainActor.run { late?.state == .finished && late?.summary?.succeeded == 1 }
+        check(lateOK, "the late job finished with its file copied")
+
+        let slept = await waitFor(ms: 15_000) { power.slept }
+        let sleeps = await MainActor.run { power.events.filter { $0 == "sleep" }.count }
+        check(slept, "the Mac slept once the queue, including the late job, was done")
+        check(sleeps == 1, "sleep ran exactly once, not under the late job", detail: "\(sleeps) sleeps")
+        await MainActor.run { clearQueue() }
+    }
+
+    static func checkJobJoiningDuringCountdown(base: URL) async {
+        print("== A job added during the sleep countdown cancels it and runs ==")
+        let power = await MainActor.run { RecordingPowerController() }
+        await MainActor.run {
+            clearQueue()
+            let queue = QueueViewModel.shared
+            queue.powerController = power
+            queue.powerSettings = PowerSettings(defaultCompletionAction: .sleep, countdownSeconds: 3)
+            queue.notificationChannels = []
+        }
+        let solo = await MainActor.run { makeJob(named: "solo", bytes: 4 * 1024 * 1024, in: base, completion: .sleep) }
+        _ = await waitFor(ms: 10_000) { solo.isReady }
+        await MainActor.run { QueueViewModel.shared.startQueue() }
+        let armed = await waitFor(ms: 20_000) { QueueViewModel.shared.pendingCompletion != nil }
+        check(armed, "the sleep countdown was armed after the solo job")
+
+        let joiner = await MainActor.run { makeJob(named: "joiner", bytes: 4 * 1024 * 1024, in: base, completion: .sleep) }
+        let cancelled = await waitFor(ms: 5_000) {
+            QueueViewModel.shared.queueActive && QueueViewModel.shared.pendingCompletion == nil
+        }
+        check(cancelled, "the countdown was cancelled when a job joined the queue")
+
+        let joinerDone = await waitFor(ms: 20_000) { joiner.state == .finished }
+        let (joinerOK, sleptEarly) = await MainActor.run {
+            (joiner.summary?.succeeded == 1, power.slept)
+        }
+        check(joinerDone && joinerOK, "the joined job ran and copied its file")
+        check(!sleptEarly, "the Mac did not sleep while the joined job was running")
+
+        let slept = await waitFor(ms: 15_000) { power.slept }
+        let sleeps = await MainActor.run { power.events.filter { $0 == "sleep" }.count }
+        check(slept && sleeps == 1, "the Mac slept exactly once, after the joined job",
+              detail: "slept=\(slept) sleeps=\(sleeps)")
+        await MainActor.run { clearQueue() }
+    }
+
+    /// Pressing one job's Copy button runs that job. Jobs already waiting stay out of the run,
+    /// but a job set up while it copies queues behind it, as does one the user adds to the queue.
+    static func checkSingleJobRunTakesLaterJobs(base: URL) async {
+        print("== A single-job run takes jobs set up after it started ==")
+        let power = await MainActor.run { RecordingPowerController() }
+        await MainActor.run {
+            clearQueue()
+            let queue = QueueViewModel.shared
+            queue.powerController = power
+            queue.powerSettings = PowerSettings(defaultCompletionAction: .sleep, countdownSeconds: 1)
+            queue.notificationChannels = []
+        }
+        let (solo, held, api, invited) = await MainActor.run { () -> (TransferJob, TransferJob, TransferJob, TransferJob) in
+            let solo = makeJob(named: "copy-one", bytes: 64 * 1024 * 1024, in: base, completion: .sleep)
+            let held = makeJob(named: "held", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            let api = makeJob(named: "api", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            api.createdViaAPI = true
+            let invited = makeJob(named: "invited", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            return (solo, held, api, invited)
+        }
+        let ready = await waitFor(ms: 10_000) { [solo, held, api, invited].allSatisfy(\.isReady) }
+        check(ready, "single-job scenario: starting jobs became ready")
+
+        await MainActor.run { QueueViewModel.shared.startQueue(startingWith: solo, only: true) }
+        let soloRunning = await waitFor(ms: 20_000) { solo.state == .running && solo.progressDone > 0 }
+        check(soloRunning, "the one job is copying")
+
+        await MainActor.run {
+            let queue = QueueViewModel.shared
+            check(!queue.isQueued(held) && queue.isHeldBack(held),
+                  "a job already waiting when Copy was pressed is held back, not shown as queued")
+            check(queue.isQueued(api) && !queue.isHeldBack(api), "a job posted to the API is never held back")
+            check(queue.isHeldBack(invited), "every job already waiting is held back")
+        }
+
+        let late = await MainActor.run { () -> TransferJob in
+            let job = makeJob(named: "set-up-later", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            check(solo.state == .running, "the later job was set up while the one job was still copying")
+            return job
+        }
+        let lateReady = await waitFor(ms: 10_000) { late.isReady }
+        let lateQueued = await MainActor.run {
+            QueueViewModel.shared.isQueued(late) && !QueueViewModel.shared.isHeldBack(late)
+        }
+        check(lateReady && lateQueued, "a job set up during a single-job run is queued behind it")
+
+        let invitedQueued = await MainActor.run { () -> Bool in
+            QueueViewModel.shared.addToQueue(invited)
+            return QueueViewModel.shared.isQueued(invited)
+        }
+        check(invitedQueued, "Add to Queue puts a held-back job into the running queue")
+        let positions = await MainActor.run { [api, invited, late].map { QueueViewModel.shared.queuePosition(of: $0) } }
+        check(positions == [1, 2, 3], "queue positions follow list order", detail: "\(positions)")
+
+        let run = await followRun()
+        let ids = await MainActor.run { [solo, api, invited, late].map(\.id) }
+        check(run.order == ids, "runs the one job, then the API job, the added job, and the later job",
+              detail: "order \(run.order.map { id in ids.firstIndex(of: id) ?? -1 })")
+        check(!run.concurrent, "single-job run never overlaps two jobs")
+        let allOK = await MainActor.run {
+            [solo, api, invited, late].allSatisfy { $0.state == .finished && $0.summary?.succeeded == 1 }
+        }
+        check(allOK, "every job in the run copied its file")
+
+        let slept = await waitFor(ms: 15_000) { power.slept }
+        let (heldStayed, sleeps) = await MainActor.run {
+            (held.state == .draft && held.isReady, power.events.filter { $0 == "sleep" }.count)
+        }
+        check(slept && sleeps == 1, "the sleep countdown ran once; the held-back job did not cancel it",
+              detail: "slept=\(slept) sleeps=\(sleeps)")
+        check(heldStayed, "the held-back job stayed out of the run, still ready")
+        await MainActor.run { clearQueue() }
     }
 }
