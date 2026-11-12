@@ -178,6 +178,7 @@
         "-entry-point-function-name",
         "-Xfrontend",
         "VeriCopy_main",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-I",
@@ -187,12 +188,12 @@
         "-plugin-path",
         "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
         "-sdk",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
         "-g",
         "-Xcc",
         "-isysroot",
         "-Xcc",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
         "-Xcc",
         "-fPIC",
         "-Xcc",
@@ -344,6 +345,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/ETASmoother.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/FTPPolicy.swift"
         },
         {
@@ -400,6 +405,7 @@
       "moduleOutputPath" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/Modules/VeriCopyCore.swiftmodule",
       "objects" : [
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/ChecksumManifest.swift.o",
+        "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/ETASmoother.swift.o",
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/FTPPolicy.swift.o",
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/Hashing.swift.o",
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/Models.swift.o",
@@ -430,6 +436,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/include/VeriCopyCore-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-I",
@@ -439,12 +446,12 @@
         "-plugin-path",
         "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
         "-sdk",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
         "-g",
         "-Xcc",
         "-isysroot",
         "-Xcc",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
         "-Xcc",
         "-fPIC",
         "-Xcc",
@@ -457,6 +464,10 @@
         {
           "kind" : "file",
           "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/ChecksumManifest.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/ETASmoother.swift.o"
         },
         {
           "kind" : "file",
@@ -510,6 +521,7 @@
       "prepareForIndexing" : false,
       "sources" : [
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/ChecksumManifest.swift",
+        "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/ETASmoother.swift",
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/FTPPolicy.swift",
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/Hashing.swift",
         "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/Models.swift",
@@ -571,6 +583,7 @@
         "-entry-point-function-name",
         "-Xfrontend",
         "vericopy_selftest_main",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-I",
@@ -580,12 +593,12 @@
         "-plugin-path",
         "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
         "-sdk",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
         "-g",
         "-Xcc",
         "-isysroot",
         "-Xcc",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
         "-Xcc",
         "-fPIC",
         "-Xcc",
@@ -666,6 +679,7 @@
       "-entry-point-function-name",
       "-Xfrontend",
       "VeriCopy_main",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-I",
@@ -675,12 +689,12 @@
       "-plugin-path",
       "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
       "-sdk",
-      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
       "-g",
       "-Xcc",
       "-isysroot",
       "-Xcc",
-      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
       "-Xcc",
       "-fPIC",
       "-Xcc",
@@ -698,6 +712,7 @@
       "teracopy_replacement",
       "-c",
       "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/ChecksumManifest.swift",
+      "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/ETASmoother.swift",
       "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/FTPPolicy.swift",
       "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/Hashing.swift",
       "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/Models.swift",
@@ -728,6 +743,7 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/include/VeriCopyCore-Swift.h",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-I",
@@ -737,12 +753,12 @@
       "-plugin-path",
       "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
       "-sdk",
-      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
       "-g",
       "-Xcc",
       "-isysroot",
       "-Xcc",
-      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
       "-Xcc",
       "-fPIC",
       "-Xcc",
@@ -779,6 +795,7 @@
       "-entry-point-function-name",
       "-Xfrontend",
       "vericopy_selftest_main",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-I",
@@ -788,12 +805,12 @@
       "-plugin-path",
       "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
       "-sdk",
-      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
       "-g",
       "-Xcc",
       "-isysroot",
       "-Xcc",
-      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
       "-Xcc",
       "-fPIC",
       "-Xcc",
@@ -822,9 +839,11 @@
 
   },
   "traitConfiguration" : {
-    "default" : {
+    "default" : [
+      {
 
-    }
+      }
+    ]
   },
   "writeCommands" : {
     "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopy.build/sources" : {
@@ -1042,6 +1061,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/ETASmoother.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/FTPPolicy.swift.o"
         },
         {
@@ -1097,6 +1120,10 @@
         {
           "kind" : "file",
           "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/ChecksumManifest.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/Sources/VeriCopyCore/ETASmoother.swift"
         },
         {
           "kind" : "file",
@@ -1169,6 +1196,10 @@
         {
           "kind" : "file",
           "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/ChecksumManifest.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/spencerbrignac/Desktop/TeraCopy Replacement/.build/arm64-apple-macosx/release/VeriCopyCore.build/ETASmoother.swift.o"
         },
         {
           "kind" : "file",
