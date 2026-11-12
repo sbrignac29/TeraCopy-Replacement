@@ -28,6 +28,45 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 940, minHeight: 500)
+        // Run controls live in the window toolbar, at the top where a moved window cannot hide
+        // them. Every item is also in the menu bar (see VeriCopyCommands).
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                QueueRunButton(queue: queue)
+            }
+            if let job = queue.currentJob {
+                ToolbarItem(placement: .navigation) {
+                    PauseResumeButton(job: job, queue: queue)
+                }
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        queue.cancelCurrentJob()
+                    } label: {
+                        Label("Cancel Current Job", systemImage: "xmark")
+                    }
+                    .help("Cancel “\(job.name)” and go on to the next job")
+                }
+            }
+            ToolbarItem(placement: .navigation) {
+                CompletionMenu()
+            }
+            if let job = queue.selectedJob {
+                ToolbarItem(placement: .primaryAction) {
+                    JobToolbarAction(job: job, queue: queue)
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    queue.newJob()
+                } label: {
+                    Label("New Job", systemImage: "plus")
+                }
+                .help("New Job")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                ViewModePicker()
+            }
+        }
         .sheet(item: $queue.conflict) { prompt in
             ConflictSheet(prompt: prompt)
                 .environmentObject(queue)
@@ -47,7 +86,6 @@ struct ContentView: View {
 
 struct SidebarView: View {
     @EnvironmentObject var queue: QueueViewModel
-    @State private var editingJobID: UUID?
 
     var body: some View {
         List(selection: $queue.selectedJobID) {
@@ -56,8 +94,8 @@ struct SidebarView: View {
                     JobRow(job: job,
                            runTakesJob: queue.queueActive && !queue.heldBackJobIDs.contains(job.id),
                            isEditing: Binding(
-                        get: { editingJobID == job.id },
-                        set: { editingJobID = $0 ? job.id : nil }
+                        get: { queue.renamingJobID == job.id },
+                        set: { queue.renamingJobID = $0 ? job.id : nil }
                     ))
                         .tag(job.id)
                         // Only jobs not yet started can be dragged. A running or finished job
@@ -84,7 +122,7 @@ struct SidebarView: View {
                             }
                             Button("Rename") {
                                 queue.selectedJobID = job.id
-                                editingJobID = job.id
+                                queue.renamingJobID = job.id
                             }
                             Button("Remove Job", role: .destructive) {
                                 queue.removeJob(job)
@@ -96,44 +134,17 @@ struct SidebarView: View {
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 270)
+        // Housekeeping only. Starting and stopping the queue is in the toolbar, because the
+        // bottom of a sidebar is the first thing a moved window hides.
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 8) {
-                HStack {
-                    Button {
-                        queue.newJob()
-                    } label: {
-                        Label("New Job", systemImage: "plus")
-                    }
-                    Spacer()
-                    if queue.queueActive {
-                        Button(role: .destructive) {
-                            queue.stopQueue()
-                        } label: {
-                            Label("Stop Queue", systemImage: "stop.fill")
-                        }
-                    } else {
-                        Button {
-                            queue.startQueue()
-                        } label: {
-                            Label("Start Queue", systemImage: "play.fill")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!queue.hasReadyJobs)
-                        .help(queue.hasReadyJobs
-                              ? "Run every ready job, top to bottom"
-                              : "No job is ready — each job needs files and a destination")
-                    }
+            if queue.hasFinishedJobs && !queue.queueActive {
+                Button("Clear Finished Jobs") {
+                    queue.removeFinishedJobs()
                 }
-                if queue.hasFinishedJobs && !queue.queueActive {
-                    Button("Clear Finished Jobs") {
-                        queue.removeFinishedJobs()
-                    }
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                .controlSize(.small)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
             }
-            .padding(10)
-            .background(.bar)
         }
     }
 }
@@ -208,18 +219,18 @@ private struct JobRow: View {
                 .controlSize(.small)
         case .paused:
             Image(systemName: "pause.circle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(StatusColor.inactive)
         case .finished:
             if let summary = job.summary {
                 if summary.failed > 0 || summary.fatalError != nil {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                    Image(systemName: failureSymbolName).foregroundStyle(StatusColor.failed)
                 } else if summary.cancelled {
-                    Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                    Image(systemName: "minus.circle.fill").foregroundStyle(StatusColor.inactive)
                 } else {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(StatusColor.verified)
                 }
             } else {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(StatusColor.verified)
             }
         }
     }
@@ -288,6 +299,7 @@ struct JobDetailView: View {
         }
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted, perform: handleDrop)
         .navigationTitle(job.name)
+        .focusedSceneValue(\.selectedJobFacts, SelectedJobFacts(job: job, queue: queue))
     }
 
     // MARK: Header
@@ -295,12 +307,13 @@ struct JobDetailView: View {
     private var header: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
-                Picker("", selection: $job.mode) {
+                Picker("Mode", selection: $job.mode) {
                     ForEach(TransferMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .frame(width: 220)
                 .disabled(!job.isEditable)
 
@@ -353,9 +366,10 @@ struct JobDetailView: View {
                         .truncationMode(.middle)
                         .help(destination.path)
                 } else {
+                    // Secondary, not tertiary: this is the state that keeps the job from
+                    // running, and tertiary measures about 2:1.
                     Text("No folder selected")
-                        .italic()
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
 
                 Button("Choose…") {
@@ -371,26 +385,6 @@ struct JobDetailView: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-
-                Picker("When done:", selection: $job.completionAction) {
-                    ForEach(CompletionAction.allCases) { action in
-                        Text(action.label).tag(action)
-                    }
-                }
-                .frame(width: 190)
-                .disabled(!job.isEditable)
-                .help("What happens after the whole queue finishes. If several jobs run, the "
-                      + "last one's choice is used. Skipped if anything failed or you stopped the queue.")
-
-                Picker("", selection: $viewModeRaw) {
-                    Image(systemName: "list.bullet").tag(DetailViewMode.files.rawValue)
-                        .help("File list")
-                    Image(systemName: "chart.xyaxis.line").tag(DetailViewMode.stats.rawValue)
-                        .help("Counters and speed graph")
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 76)
-                .help("Switch between the file list and the live statistics view")
             }
         }
         .padding(12)
@@ -410,7 +404,7 @@ struct JobDetailView: View {
                         .foregroundStyle(.secondary)
                     Text("or click Add… to choose what to \(job.mode.rawValue.lowercased())")
                         .font(.callout)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
             } else if viewMode == .stats {
                 JobStatsView(job: job)
@@ -512,11 +506,12 @@ struct JobDetailView: View {
             HStack(spacing: 10) {
                 if job.isVerificationPhase {
                     Label("Verification pass", systemImage: "checkmark.shield")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(StatusColor.verifying)
                 }
                 Text("\(byteText(job.progressDone)) of \(byteText(job.progressTotal))")
                 if job.state == .paused {
-                    Text("Paused").foregroundStyle(.orange).bold()
+                    // Paused needs no alarm color; weight sets it apart from the counters.
+                    Text("Paused").foregroundStyle(.primary).bold()
                 } else if job.speedBytesPerSecond > 1 {
                     Text("\(byteText(Int64(job.speedBytesPerSecond)))/s")
                     if let eta = job.etaText {
@@ -557,98 +552,33 @@ struct JobDetailView: View {
         if summary.failed > 0 { parts.append("\(summary.failed) FAILED") }
         parts.append("in \(elapsed)")
 
+        let hasFailures = summary.failed > 0 || summary.fatalError != nil
         return HStack(spacing: 6) {
-            Image(systemName: summary.failed > 0 || summary.fatalError != nil
-                  ? "exclamationmark.triangle.fill"
+            Image(systemName: hasFailures
+                  ? failureSymbolName
                   : (summary.cancelled ? "minus.circle.fill" : "checkmark.seal.fill"))
-                .foregroundStyle(summary.failed > 0 || summary.fatalError != nil
-                                 ? .yellow
-                                 : (summary.cancelled ? Color.secondary : .green))
+                .foregroundStyle(hasFailures
+                                 ? StatusColor.failed
+                                 : (summary.cancelled ? StatusColor.inactive : StatusColor.verified))
             Text(parts.joined(separator: " · "))
                 .foregroundStyle(summary.failed > 0 ? .primary : .secondary)
         }
     }
 
+    /// Secondary actions on this job's contents. Starting, pausing and cancelling are in the
+    /// toolbar, since people often move a window so that its bottom edge is hidden.
     @ViewBuilder
     private var footerButtons: some View {
         switch job.state {
         case .draft:
             Button("Clear") { job.clearItems() }
                 .disabled(job.items.isEmpty)
-            if queue.isHeldBack(job) {
-                Button {
-                    queue.addToQueue(job)
-                } label: {
-                    Label("Add to Queue", systemImage: "text.badge.plus")
-                        .frame(minWidth: 70)
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(!job.isReady && job.scansInFlight == 0)
-                .help(job.readinessNote ?? "Run this job in the current run, in list order")
-            } else {
-                Button {
-                    queue.startQueue(startingWith: job, only: true)
-                } label: {
-                    Label(startTitle, systemImage: startIcon)
-                        .frame(minWidth: 70)
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(!job.isReady || queue.queueActive)
-                .help(job.readinessNote ?? (queue.queueActive
-                      ? "Already queued: it runs once the jobs above it finish. Drag to reorder."
-                      : "Run this job now"))
-            }
-        case .running:
-            Button {
-                queue.pauseCurrent()
-            } label: {
-                Label("Pause", systemImage: "pause.fill")
-            }
-            cancelButton
-        case .paused:
-            Button {
-                queue.resumeCurrent()
-            } label: {
-                Label("Resume", systemImage: "play.fill")
-            }
-            .keyboardShortcut(.defaultAction)
-            cancelButton
+        case .running, .paused:
+            EmptyView()
         case .finished:
             if job.canExportChecksums {
                 Button("Save Checksums…") { job.exportChecksums() }
             }
-            Button {
-                queue.runAgain(job)
-            } label: {
-                Label("Run Again", systemImage: "arrow.counterclockwise")
-            }
-            .disabled(queue.queueActive)
-        }
-    }
-
-    private var startTitle: String {
-        switch job.mode {
-        case .copy: return "Copy"
-        case .move: return "Move"
-        case .verify: return "Verify"
-        }
-    }
-
-    private var startIcon: String {
-        switch job.mode {
-        case .copy: return "doc.on.doc"
-        case .move: return "arrow.right.doc.on.clipboard"
-        case .verify: return "checkmark.shield"
-        }
-    }
-
-    private var cancelButton: some View {
-        Button(role: .destructive) {
-            queue.cancelCurrentJob()
-        } label: {
-            Label("Cancel Job", systemImage: "xmark")
         }
     }
 
@@ -720,11 +650,11 @@ private struct FileRow: View {
         } else if item.status == .copied {
             ProgressView(value: 1.0)
                 .progressViewStyle(.linear)
-                .tint(.blue)
+                .tint(StatusColor.copying)
         } else if item.status == .done || item.status == .doneNoVerify {
             ProgressView(value: 1.0)
                 .progressViewStyle(.linear)
-                .tint(.green)
+                .tint(StatusColor.verified)
         } else {
             ProgressView(value: 0)
                 .progressViewStyle(.linear)
@@ -744,7 +674,10 @@ private struct StatusCell: View {
                 .foregroundStyle(color)
             Text(text)
                 .fixedSize(horizontal: false, vertical: true)
-                .foregroundStyle(item.status == .failed ? Color.red : Color.secondary)
+                // Red text is 3.57:1 on a light window, under the 4.5:1 text needs. The red
+                // octagon carries the color; primary text sets a failure apart from the
+                // secondary-colored statuses around it.
+                .foregroundStyle(item.status == .failed ? Color.primary : Color.secondary)
         }
         .help(item.message ?? text)
     }
@@ -758,19 +691,19 @@ private struct StatusCell: View {
         case .done: return "checkmark.seal.fill"
         case .doneNoVerify: return "checkmark.circle"
         case .skipped: return "minus.circle"
-        case .failed: return "xmark.octagon.fill"
+        case .failed: return failureSymbolName
         }
     }
 
     private var color: Color {
         switch item.status {
-        case .pending: return .secondary
-        case .copying: return .blue
-        case .verifying: return .orange
-        case .copied: return .blue
-        case .done, .doneNoVerify: return .green
-        case .skipped: return .secondary
-        case .failed: return .red
+        case .pending: return StatusColor.inactive
+        case .copying: return StatusColor.copying
+        case .verifying: return StatusColor.verifying
+        case .copied: return StatusColor.copying
+        case .done, .doneNoVerify: return StatusColor.verified
+        case .skipped: return StatusColor.inactive
+        case .failed: return StatusColor.failed
         }
     }
 

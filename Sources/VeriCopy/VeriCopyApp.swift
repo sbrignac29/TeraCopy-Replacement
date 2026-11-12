@@ -17,18 +17,7 @@ struct VeriCopyApp: App {
         // footer (Copy button, etc.) can never be clipped by shrinking the window too far.
         .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("New Job") {
-                    QueueViewModel.shared.newJob()
-                }
-                .keyboardShortcut("n")
-
-                Button("Add Files or Folders…") {
-                    QueueViewModel.shared.selectedJob?.promptAddSources()
-                }
-                .keyboardShortcut("o")
-                .disabled(!(QueueViewModel.shared.selectedJob?.isEditable ?? false))
-            }
+            VeriCopyCommands(queue: queue)
         }
 
         Settings {

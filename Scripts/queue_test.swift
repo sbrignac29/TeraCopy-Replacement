@@ -134,7 +134,6 @@ struct QueueTest {
             // whole path quickly. RecordingPowerController only sets a flag.
             queue.powerController = power
             queue.powerSettings = PowerSettings(defaultCompletionAction: .sleep, countdownSeconds: 1)
-            for job in queue.jobs { job.completionAction = .sleep }
         }
 
         // Start the queue and watch it: never more than one job running,
@@ -279,7 +278,6 @@ struct QueueTest {
             for job in queue.jobs {
                 job.resetForRun()
                 job.state = .draft
-                job.completionAction = .sleep
             }
             queue.startQueue()
         }
@@ -430,6 +428,7 @@ struct QueueTest {
         await checkJobJoiningAtQueueEnd(base: base)
         await checkJobJoiningDuringCountdown(base: base)
         await checkSingleJobRunTakesLaterJobs(base: base)
+        await checkAPIOnlyRunNeverSleeps(base: base)
         await MainActor.run { clearQueue() }
 
         print("")
@@ -448,7 +447,7 @@ struct QueueTest {
     /// Adds a queued job with one source file and its own destination. The scan runs in the
     /// background, so the job becomes ready a moment later; wait for it with `waitFor`.
     @MainActor
-    static func makeJob(named name: String, bytes: Int, in base: URL, completion: CompletionAction) -> TransferJob {
+    static func makeJob(named name: String, bytes: Int, in base: URL) -> TransferJob {
         let fm = FileManager.default
         let sourceDir = base.appendingPathComponent("src-\(name)")
         let destDir = base.appendingPathComponent("dst-\(name)")
@@ -461,7 +460,6 @@ struct QueueTest {
         job.name = name
         job.destination = destDir
         job.verification = .perFile
-        job.completionAction = completion
         job.addSources([file])
         return job
     }
@@ -506,10 +504,13 @@ struct QueueTest {
     }
 
     /// Empties the shared queue. A fake state set by an earlier check would block removal, so
-    /// every job is returned to draft first.
+    /// every job is returned to draft first. Also resets When Done to "do nothing", which is
+    /// one setting for the whole queue: a check that needs a sleep sets it after this.
     @MainActor
     static func clearQueue() {
         let queue = QueueViewModel.shared
+        queue.cancelPendingCompletion()
+        queue.powerSettings = PowerSettings()
         for job in queue.jobs { job.state = .draft }
         for job in queue.jobs { queue.removeJob(job) }
     }
@@ -560,7 +561,7 @@ struct QueueTest {
         await MainActor.run { clearQueue() }
         let jobs = await MainActor.run { () -> [TransferJob] in
             ["alpha", "bravo", "charlie"].map {
-                makeJob(named: $0, bytes: 4 * 1024 * 1024, in: base, completion: .nothing)
+                makeJob(named: $0, bytes: 4 * 1024 * 1024, in: base)
             }
         }
         let ids = await MainActor.run { jobs.map(\.id) }
@@ -583,9 +584,9 @@ struct QueueTest {
     static func checkJoinAndReorderWhileRunning(base: URL) async {
         print("== Jobs added and reordered while a job copies ==")
         await MainActor.run { clearQueue() }
-        let first = await MainActor.run { makeJob(named: "first", bytes: 64 * 1024 * 1024, in: base, completion: .nothing) }
-        let second = await MainActor.run { makeJob(named: "second", bytes: 4 * 1024 * 1024, in: base, completion: .nothing) }
-        let third = await MainActor.run { makeJob(named: "third", bytes: 4 * 1024 * 1024, in: base, completion: .nothing) }
+        let first = await MainActor.run { makeJob(named: "first", bytes: 64 * 1024 * 1024, in: base) }
+        let second = await MainActor.run { makeJob(named: "second", bytes: 4 * 1024 * 1024, in: base) }
+        let third = await MainActor.run { makeJob(named: "third", bytes: 4 * 1024 * 1024, in: base) }
         let ready = await waitFor(ms: 10_000) { first.isReady && second.isReady && third.isReady }
         check(ready, "mid-run scenario: starting jobs became ready")
 
@@ -595,7 +596,7 @@ struct QueueTest {
 
         // Added while `first` is still copying: it must join the queue, not wait for a new Start.
         let fourth = await MainActor.run { () -> TransferJob in
-            let job = makeJob(named: "fourth", bytes: 4 * 1024 * 1024, in: base, completion: .nothing)
+            let job = makeJob(named: "fourth", bytes: 4 * 1024 * 1024, in: base)
             check(first.state == .running, "the fourth job was added while the first was still running")
             return job
         }
@@ -626,7 +627,7 @@ struct QueueTest {
         print("== A job added as the queue winds down is not stranded ==")
         let power = await MainActor.run { RecordingPowerController() }
         let hook = JoinAtQueueEndChannel {
-            _ = makeJob(named: "late", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            _ = makeJob(named: "late", bytes: 4 * 1024 * 1024, in: base)
         }
         await MainActor.run {
             clearQueue()
@@ -637,8 +638,8 @@ struct QueueTest {
             queue.notificationSettings = NotificationSettings(desktopEnabled: true, trigger: .eachJob)
         }
         let early = await MainActor.run { () -> [TransferJob] in
-            [makeJob(named: "early-a", bytes: 4 * 1024 * 1024, in: base, completion: .sleep),
-             makeJob(named: "early-b", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)]
+            [makeJob(named: "early-a", bytes: 4 * 1024 * 1024, in: base),
+             makeJob(named: "early-b", bytes: 4 * 1024 * 1024, in: base)]
         }
         let earlyIDs = await MainActor.run { early.map(\.id) }
         _ = await waitFor(ms: 10_000) { early.allSatisfy(\.isReady) }
@@ -670,13 +671,13 @@ struct QueueTest {
             queue.powerSettings = PowerSettings(defaultCompletionAction: .sleep, countdownSeconds: 3)
             queue.notificationChannels = []
         }
-        let solo = await MainActor.run { makeJob(named: "solo", bytes: 4 * 1024 * 1024, in: base, completion: .sleep) }
+        let solo = await MainActor.run { makeJob(named: "solo", bytes: 4 * 1024 * 1024, in: base) }
         _ = await waitFor(ms: 10_000) { solo.isReady }
         await MainActor.run { QueueViewModel.shared.startQueue() }
         let armed = await waitFor(ms: 20_000) { QueueViewModel.shared.pendingCompletion != nil }
         check(armed, "the sleep countdown was armed after the solo job")
 
-        let joiner = await MainActor.run { makeJob(named: "joiner", bytes: 4 * 1024 * 1024, in: base, completion: .sleep) }
+        let joiner = await MainActor.run { makeJob(named: "joiner", bytes: 4 * 1024 * 1024, in: base) }
         let cancelled = await waitFor(ms: 5_000) {
             QueueViewModel.shared.queueActive && QueueViewModel.shared.pendingCompletion == nil
         }
@@ -709,11 +710,11 @@ struct QueueTest {
             queue.notificationChannels = []
         }
         let (solo, held, api, invited) = await MainActor.run { () -> (TransferJob, TransferJob, TransferJob, TransferJob) in
-            let solo = makeJob(named: "copy-one", bytes: 64 * 1024 * 1024, in: base, completion: .sleep)
-            let held = makeJob(named: "held", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
-            let api = makeJob(named: "api", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            let solo = makeJob(named: "copy-one", bytes: 64 * 1024 * 1024, in: base)
+            let held = makeJob(named: "held", bytes: 4 * 1024 * 1024, in: base)
+            let api = makeJob(named: "api", bytes: 4 * 1024 * 1024, in: base)
             api.createdViaAPI = true
-            let invited = makeJob(named: "invited", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            let invited = makeJob(named: "invited", bytes: 4 * 1024 * 1024, in: base)
             return (solo, held, api, invited)
         }
         let ready = await waitFor(ms: 10_000) { [solo, held, api, invited].allSatisfy(\.isReady) }
@@ -732,7 +733,7 @@ struct QueueTest {
         }
 
         let late = await MainActor.run { () -> TransferJob in
-            let job = makeJob(named: "set-up-later", bytes: 4 * 1024 * 1024, in: base, completion: .sleep)
+            let job = makeJob(named: "set-up-later", bytes: 4 * 1024 * 1024, in: base)
             check(solo.state == .running, "the later job was set up while the one job was still copying")
             return job
         }
@@ -767,6 +768,38 @@ struct QueueTest {
         check(slept && sleeps == 1, "the sleep countdown ran once; the held-back job did not cancel it",
               detail: "slept=\(slept) sleeps=\(sleeps)")
         check(heldStayed, "the held-back job stayed out of the run, still ready")
+        await MainActor.run { clearQueue() }
+    }
+
+    /// When Done is one choice for the whole queue. A run made up only of jobs posted to the
+    /// local API must never act on it: a dashboard request cannot sleep the Mac or quit.
+    static func checkAPIOnlyRunNeverSleeps(base: URL) async {
+        print("== A run of only API jobs never sleeps the Mac ==")
+        let power = await MainActor.run { RecordingPowerController() }
+        await MainActor.run {
+            clearQueue()
+            let queue = QueueViewModel.shared
+            queue.powerController = power
+            queue.powerSettings = PowerSettings(defaultCompletionAction: .sleep, countdownSeconds: 1)
+            queue.notificationChannels = []
+        }
+        let api = await MainActor.run { () -> TransferJob in
+            let job = makeJob(named: "api-only", bytes: 4 * 1024 * 1024, in: base)
+            job.createdViaAPI = true
+            return job
+        }
+        _ = await waitFor(ms: 10_000) { api.isReady }
+        await MainActor.run { QueueViewModel.shared.startQueue() }
+        let run = await followRun()
+        let apiID = await MainActor.run { api.id }
+        check(run.order == [apiID], "the API job ran on its own")
+
+        try? await Task.sleep(nanoseconds: 1_500_000_000) // longer than the countdown would be
+        let (slept, pending) = await MainActor.run {
+            (power.slept, QueueViewModel.shared.pendingCompletion != nil)
+        }
+        check(!slept && !pending, "an API-only run arms no countdown, though When Done is set to sleep",
+              detail: "slept=\(slept) pending=\(pending)")
         await MainActor.run { clearQueue() }
     }
 }
