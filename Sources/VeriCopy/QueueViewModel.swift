@@ -36,6 +36,14 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
     var powerSettings = PowerSettings()
     /// Per-job completion actions for the jobs that actually ran this queue pass, in order.
     private var runActions: [CompletionAction] = []
+    /// Summaries for everything the current run has executed, across any resumes. Cleared only
+    /// by a fresh Start, so the end-of-run decision covers every job the user queued in that run.
+    private var runSummaries: [TransferSummary] = []
+    /// Drafts the current run leaves alone. Pressing one job's Copy button runs that job, not
+    /// every other job the user had already set up, so those are held back. Anything set up
+    /// after the run starts is not in here, so it joins the run. Reset by every fresh Start
+    /// and kept across a resume, since a resume continues the same run.
+    @Published private(set) var heldBackJobIDs: Set<UUID> = []
     /// The armed completion action, if any. Drives the floating countdown panel.
     @Published private(set) var pendingCompletion: PendingCompletion?
     private var completionTask: Task<Void, Never>?
@@ -87,6 +95,97 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         if !keepSelection { selectedJobID = jobs.last?.id }
     }
 
+    // MARK: - Queue order
+
+    /// The earliest list position a queued job may occupy: just below the last job that has
+    /// started (running, paused or finished). Queued jobs never sit above a started job, so the
+    /// list reads top to bottom in the order the queue will run.
+    private var queueFloor: Int {
+        (jobs.lastIndex { $0.state != .draft } ?? -1) + 1
+    }
+
+    /// Moves queued jobs. Uses SwiftUI's `onMove` convention: `destination` is the insertion
+    /// point in the current list. Only queued (draft) jobs can move, and nothing can be dropped
+    /// above a job that has started. Running and finished jobs keep their places, so a reorder
+    /// is safe while another job is transferring.
+    func moveQueuedJobs(fromOffsets source: IndexSet, toOffset destination: Int) {
+        guard !source.isEmpty,
+              source.allSatisfy({ jobs.indices.contains($0) && jobs[$0].state == .draft }) else { return }
+        jobs.move(fromOffsets: source, toOffset: max(destination, queueFloor))
+    }
+
+    /// Whether a queued job can move one place up (`-1`) or down (`+1`) among the queued jobs.
+    func canMoveQueuedJob(_ job: TransferJob, by step: Int) -> Bool {
+        queueMoveTarget(for: job, by: step) != nil
+    }
+
+    /// Moves a queued job one place up or down among the queued jobs. A no-op when it is
+    /// already at the edge the queue allows.
+    func moveQueuedJob(_ job: TransferJob, by step: Int) {
+        guard let target = queueMoveTarget(for: job, by: step),
+              let index = jobs.firstIndex(where: { $0.id == job.id }) else { return }
+        jobs.move(fromOffsets: IndexSet(integer: index), toOffset: target)
+    }
+
+    /// The insertion point that moves `job` one queued place in `step`'s direction, or nil if
+    /// the move would change nothing (no queued neighbour, or the started-job floor is in the way).
+    private func queueMoveTarget(for job: TransferJob, by step: Int) -> Int? {
+        guard job.state == .draft, let index = jobs.firstIndex(where: { $0.id == job.id }) else { return nil }
+        let target: Int
+        if step < 0 {
+            guard let neighbour = jobs[..<index].lastIndex(where: { $0.state == .draft }) else { return nil }
+            target = neighbour
+        } else {
+            guard let neighbour = jobs[(index + 1)...].firstIndex(where: { $0.state == .draft }) else { return nil }
+            target = neighbour + 1
+        }
+        let clamped = max(target, queueFloor)
+        // Inserting at `index` or `index + 1` leaves the list as it is.
+        return (clamped == index || clamped == index + 1) ? nil : clamped
+    }
+
+    /// A draft with work set up: ready to go, or still scanning its folders on the way.
+    private static func hasWorkSetUp(_ job: TransferJob) -> Bool {
+        job.state == .draft && (job.isReady || job.scansInFlight > 0)
+    }
+
+    /// A job the current run still owes: work set up, and not held back from the run.
+    private func owesWork(_ job: TransferJob) -> Bool {
+        Self.hasWorkSetUp(job) && !heldBackJobIDs.contains(job.id)
+    }
+
+    private var hasPendingWork: Bool {
+        jobs.contains(where: owesWork)
+    }
+
+    /// The job the run takes next: the first ready one in list order that is not held back.
+    private var nextQueuedJob: TransferJob? {
+        jobs.first { $0.isReady && !heldBackJobIDs.contains($0.id) }
+    }
+
+    /// Whether the running queue will take this job once the jobs above it finish.
+    func isQueued(_ job: TransferJob) -> Bool {
+        queueActive && job.isReady && !heldBackJobIDs.contains(job.id)
+    }
+
+    /// Whether a job set up before this run started was left out of it. Such a job can join
+    /// with `addToQueue`.
+    func isHeldBack(_ job: TransferJob) -> Bool {
+        queueActive && job.state == .draft && heldBackJobIDs.contains(job.id)
+    }
+
+    /// Puts a held-back job into the running queue, at its place in the list.
+    func addToQueue(_ job: TransferJob) {
+        heldBackJobIDs.remove(job.id)
+    }
+
+    /// Where a queued job stands in line: 1 for the job that starts next. Nil if not queued.
+    func queuePosition(of job: TransferJob) -> Int? {
+        guard isQueued(job) else { return nil }
+        let queued = jobs.filter(isQueued)
+        return queued.firstIndex { $0 === job }.map { $0 + 1 }
+    }
+
     /// Files dropped anywhere land in the selected draft job, or start a fresh one.
     func handleDroppedURLs(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
@@ -99,14 +198,30 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
 
     // MARK: - Queue execution
 
-    /// Runs every ready job in list order. Pass a specific job (with `only: true`)
-    /// to run just that one.
+    /// Runs every ready job in list order. Pass a specific job (with `only: true`) to run that
+    /// one: the other jobs already set up are held back, but a job set up while it runs still
+    /// queues behind it.
     func startQueue(startingWith first: TransferJob? = nil, only: Bool = false) {
         guard !queueActive else { return }
         // A countdown from a previous run must never survive into a new one — otherwise a
         // stale "quit" could fire in the middle of this transfer.
         cancelPendingCompletion()
         stopRequested = false
+        completedThisRun = []
+        runSummaries = []
+        runActions = []
+        // A job posted to the local API is never held back: the API promises it starts as
+        // soon as the queue reaches it.
+        heldBackJobIDs = only
+            ? Set(jobs.filter { $0 !== first && !$0.createdViaAPI && Self.hasWorkSetUp($0) }.map(\.id))
+            : []
+        launchRun(startingWith: first)
+    }
+
+    /// Raises `queueActive` and starts the run loop. Shared by a fresh Start and by a run that
+    /// resumes because work joined while the previous pass was winding down. The resume path
+    /// must not touch the run's accounting, which is why it does not live in `startQueue`.
+    private func launchRun(startingWith first: TransferJob?) {
         queueActive = true
         // NOTE: `.userInitiated` already contains `idleSystemSleepDisabled`, so using it
         // here would silently keep the Mac awake even with the keep-awake setting off.
@@ -120,28 +235,34 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         )
         reconcileKeepAwake()
 
-        completedThisRun = []
-        runActions = []
         Task {
             if let first, first.isReady {
                 await run(first)
             }
-            if !only {
-                while !stopRequested, let next = jobs.first(where: { $0.isReady }) {
-                    await run(next)
-                }
-            }
+            await drainQueuedJobs()
             await endQueueRun()
+        }
+    }
+
+    /// Runs queued jobs until none is left. The next job is looked up after each one finishes,
+    /// so jobs added or reordered while one copies run in the order the list shows by then.
+    /// A queued job still scanning its folders is about to become ready, so the run waits for
+    /// it instead of ending early and stranding it.
+    private func drainQueuedJobs() async {
+        while !stopRequested {
+            if let next = nextQueuedJob {
+                await run(next)
+            } else if hasPendingWork {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            } else {
+                return
+            }
         }
     }
 
     /// The single teardown point every queue exit path converges on — normal drain,
     /// Stop Queue, per-job cancel, and fatal errors all land here.
     private func endQueueRun() async {
-        // Snapshot BEFORE notifyQueueComplete(), which consumes `completedThisRun` and also
-        // early-returns for single-job runs — so the power policy can't live inside it.
-        let summaries = completedThisRun
-        let actions = runActions
         let wasStopped = stopRequested
 
         if let token = activityToken {
@@ -156,16 +277,18 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         // iMessage has actually been handed to Messages before we could sleep or quit.
         await notifyQueueComplete()
 
-        // A job posted to the local API while a single-job run was in flight would otherwise
-        // sit queued for ever: `startQueue(only: true)` runs the one job it was handed and
-        // stops, so nothing ever re-scans for work. Pick those up instead of arming a
-        // completion action (sleep, quit) on top of transfers that have not run yet.
-        if !wasStopped, jobs.contains(where: { $0.createdViaAPI && $0.isReady }) {
-            startQueue()
+        // Delivery suspends, and during that window the Start button is live and a job can be
+        // added or finish scanning. Such a job must not be stranded, and the run is not over
+        // while it waits, so the run resumes instead of arming a sleep or quit under it. A Start
+        // pressed in that window already owns the teardown. Held-back jobs are not owed, so
+        // they never keep a run going.
+        guard !queueActive else { return }
+        if !wasStopped && hasPendingWork {
+            launchRun(startingWith: nil)
             return
         }
 
-        armCompletion(summaries: summaries, actions: actions, stopRequested: wasStopped)
+        armCompletion(summaries: runSummaries, actions: runActions, stopRequested: wasStopped)
     }
 
     /// Cancels one job by identity, whether it is running or still waiting in the queue.
@@ -241,6 +364,7 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         }
 
         completedThisRun.append(summary)
+        runSummaries.append(summary)
         runActions.append(job.completionAction)
         await notifyJobComplete(job, summary: summary)
     }
@@ -299,11 +423,15 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
             // Worth interrupting for — they walked away expecting this to happen.
             alertMessage = "VeriCopy didn't \(action.verbPhrase) — the run finished with errors."
         case .armCountdown(let action, let seconds):
-            startCountdown(action: action, seconds: seconds, outcome: outcome)
+            startCountdown(action: action, seconds: seconds, outcome: outcome, watchesForNewWork: true)
         }
     }
 
-    private func startCountdown(action: CompletionAction, seconds: Int, outcome: RunOutcome) {
+    /// `watchesForNewWork` is true for an end-of-run countdown: if work joins the queue while it
+    /// runs, the countdown is cancelled and the queue carries on. The test countdown passes
+    /// false, since it must never start a transfer.
+    private func startCountdown(action: CompletionAction, seconds: Int, outcome: RunOutcome,
+                                watchesForNewWork: Bool) {
         completionTask?.cancel()
         // The display is allowed to sleep during a transfer, so wake it — otherwise the
         // countdown would tick away on a dark screen with no chance to cancel.
@@ -320,8 +448,19 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         // Deadline-based rather than N× sleep(1s): a stalled main actor (e.g. the user has
         // a modal save panel open) can't stretch the window beyond the wall-clock deadline.
         let deadline = Date().addingTimeInterval(TimeInterval(seconds))
+        // Work already owed when the countdown is armed is not new. Only work that joins
+        // afterwards cancels it. (Held-back drafts are never owed, so they cannot cancel it.)
+        let knownWork = Set(jobs.filter(owesWork).map(\.id))
         completionTask = Task { [weak self] in
             while !Task.isCancelled {
+                // The queue is not finished while new work waits in it. Sleeping now would strand
+                // that work, so cancel the countdown and carry on with the queue instead.
+                if watchesForNewWork, let self,
+                   self.jobs.contains(where: { self.owesWork($0) && !knownWork.contains($0.id) }) {
+                    self.cancelPendingCompletion()
+                    self.launchRun(startingWith: nil)
+                    return
+                }
                 let remaining = Int(ceil(deadline.timeIntervalSinceNow))
                 guard remaining > 0 else { break }
                 self?.pendingCompletion?.secondsRemaining = remaining
@@ -345,7 +484,11 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
     /// Name of the destination volume if it's removable — so the panel can warn the user
     /// not to unplug the drive until the Mac is actually asleep.
     private func removableDestinationName() -> String? {
-        guard let destination = jobs.last(where: { $0.state == .finished })?.destination else { return nil }
+        // The job that finished last, by time: the queue can be reordered, so list position
+        // no longer says which job ran last.
+        let lastFinished = jobs.filter { $0.state == .finished }
+            .max { ($0.finishedAt ?? .distantPast) < ($1.finishedAt ?? .distantPast) }
+        guard let destination = lastFinished?.destination else { return nil }
         let keys: Set<URLResourceKey> = [.volumeIsRemovableKey, .volumeIsEjectableKey, .volumeNameKey]
         guard let values = try? destination.resourceValues(forKeys: keys) else { return nil }
         let removable = (values.volumeIsRemovable ?? false) || (values.volumeIsEjectable ?? false)
@@ -366,7 +509,7 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         guard !queueActive else { return }
         var outcome = RunOutcome()
         outcome.jobCount = 0
-        startCountdown(action: .nothing, seconds: seconds, outcome: outcome)
+        startCountdown(action: .nothing, seconds: seconds, outcome: outcome, watchesForNewWork: false)
     }
 
     /// Skip the remaining countdown and act immediately ("Sleep Now" on the panel).

@@ -14,6 +14,9 @@ enum JobState: Equatable {
 @MainActor
 final class TransferJob: ObservableObject, Identifiable {
     let id = UUID()
+    /// Creation order, counted from 1. The queue can be reordered, so anything that means
+    /// "newest" (the API listing) must use this rather than position in the list.
+    let number: Int
 
     @Published var name: String
     @Published var mode: TransferMode = .copy
@@ -117,6 +120,7 @@ final class TransferJob: ObservableObject, Identifiable {
     private var hasEMA = false
 
     init(number: Int) {
+        self.number = number
         name = "Job \(number)"
         if let raw = UserDefaults.standard.string(forKey: "hashAlgorithm"),
            let saved = HashAlgorithm(rawValue: raw) {

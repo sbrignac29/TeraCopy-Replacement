@@ -53,12 +53,35 @@ struct SidebarView: View {
         List(selection: $queue.selectedJobID) {
             Section("Queue") {
                 ForEach(queue.jobs) { job in
-                    JobRow(job: job, isEditing: Binding(
+                    JobRow(job: job,
+                           runTakesJob: queue.queueActive && !queue.heldBackJobIDs.contains(job.id),
+                           isEditing: Binding(
                         get: { editingJobID == job.id },
                         set: { editingJobID = $0 ? job.id : nil }
                     ))
                         .tag(job.id)
+                        // Only jobs not yet started can be dragged. A running or finished job
+                        // keeps its place, and a queued job cannot be dropped above one.
+                        .moveDisabled(job.state != .draft)
                         .contextMenu {
+                            // Not gated on `isReady`: this view does not observe the job, so that
+                            // could be stale. A held-back job still scanning joins once it is done.
+                            if queue.isHeldBack(job) {
+                                Button("Add to Queue") {
+                                    queue.addToQueue(job)
+                                }
+                            }
+                            if job.state == .draft {
+                                Button("Move Up in Queue") {
+                                    queue.moveQueuedJob(job, by: -1)
+                                }
+                                .disabled(!queue.canMoveQueuedJob(job, by: -1))
+                                Button("Move Down in Queue") {
+                                    queue.moveQueuedJob(job, by: 1)
+                                }
+                                .disabled(!queue.canMoveQueuedJob(job, by: 1))
+                                Divider()
+                            }
                             Button("Rename") {
                                 queue.selectedJobID = job.id
                                 editingJobID = job.id
@@ -69,6 +92,7 @@ struct SidebarView: View {
                             .disabled(job.isActive)
                         }
                 }
+                .onMove { queue.moveQueuedJobs(fromOffsets: $0, toOffset: $1) }
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 270)
@@ -116,6 +140,9 @@ struct SidebarView: View {
 
 private struct JobRow: View {
     @ObservedObject var job: TransferJob
+    /// The queue is running and will take this job once it is ready. Readiness is checked
+    /// here rather than by the parent, because only this row observes the job itself.
+    let runTakesJob: Bool
     @Binding var isEditing: Bool
     @State private var draftName = ""
     @FocusState private var nameFieldFocused: Bool
@@ -206,6 +233,9 @@ private struct JobRow: View {
         }
         if let destination = job.destination {
             parts.append("→ \(destination.lastPathComponent)")
+        }
+        if runTakesJob && job.isReady {
+            parts.append("queued")
         }
         if job.state == .finished, let summary = job.summary {
             if summary.cancelled {
@@ -476,7 +506,7 @@ struct JobDetailView: View {
     private var statsText: some View {
         switch job.state {
         case .draft:
-            Text(job.readinessNote ?? "Ready — start this job or the whole queue")
+            Text(draftNote)
                 .foregroundStyle(.secondary)
         case .running, .paused:
             HStack(spacing: 10) {
@@ -501,6 +531,21 @@ struct JobDetailView: View {
                 summaryText(summary)
             }
         }
+    }
+
+    /// What a draft says about itself. While the queue runs, a ready draft is queued unless the
+    /// run held it back.
+    private var draftNote: String {
+        if let note = job.readinessNote { return note }
+        if let position = queue.queuePosition(of: job) {
+            return position == 1
+                ? "Queued — starts when the current job finishes"
+                : "Queued — \(position - 1) job\(position == 2 ? "" : "s") ahead of it"
+        }
+        if queue.isHeldBack(job) {
+            return "Not part of the current run — Add to Queue to run it in list order"
+        }
+        return "Ready — start this job or the whole queue"
     }
 
     private func summaryText(_ summary: TransferSummary) -> some View {
@@ -530,16 +575,31 @@ struct JobDetailView: View {
         case .draft:
             Button("Clear") { job.clearItems() }
                 .disabled(job.items.isEmpty)
-            Button {
-                queue.startQueue(startingWith: job, only: true)
-            } label: {
-                Label(startTitle, systemImage: startIcon)
-                    .frame(minWidth: 70)
+            if queue.isHeldBack(job) {
+                Button {
+                    queue.addToQueue(job)
+                } label: {
+                    Label("Add to Queue", systemImage: "text.badge.plus")
+                        .frame(minWidth: 70)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!job.isReady && job.scansInFlight == 0)
+                .help(job.readinessNote ?? "Run this job in the current run, in list order")
+            } else {
+                Button {
+                    queue.startQueue(startingWith: job, only: true)
+                } label: {
+                    Label(startTitle, systemImage: startIcon)
+                        .frame(minWidth: 70)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!job.isReady || queue.queueActive)
+                .help(job.readinessNote ?? (queue.queueActive
+                      ? "Already queued: it runs once the jobs above it finish. Drag to reorder."
+                      : "Run this job now"))
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(!job.isReady || queue.queueActive)
-            .help(job.readinessNote ?? (queue.queueActive ? "Queue is running" : "Run this job now"))
         case .running:
             Button {
                 queue.pauseCurrent()
