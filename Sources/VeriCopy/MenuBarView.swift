@@ -121,9 +121,9 @@ struct MenuBarPanel: View {
                     .lineLimit(1)
                 Spacer()
                 if job.state == .paused {
-                    Text("Paused").font(.caption).foregroundStyle(.orange)
+                    Text("Paused").font(.caption).foregroundStyle(.secondary)
                 } else if job.isVerificationPhase {
-                    Text("Verifying").font(.caption).foregroundStyle(.blue)
+                    Text("Verifying").font(.caption).foregroundStyle(StatusColor.verifying)
                 }
             }
 
@@ -187,10 +187,10 @@ struct MenuBarPanel: View {
 
     private func resultIcon(_ summary: TransferSummary?) -> some View {
         let (symbol, color): (String, Color) = {
-            guard let summary else { return ("checkmark.circle.fill", .green) }
-            if summary.failed > 0 || summary.fatalError != nil { return ("exclamationmark.triangle.fill", .yellow) }
-            if summary.cancelled { return ("minus.circle.fill", .secondary) }
-            return ("checkmark.circle.fill", .green)
+            guard let summary else { return ("checkmark.circle.fill", StatusColor.verified) }
+            if summary.failed > 0 || summary.fatalError != nil { return (failureSymbolName, StatusColor.failed) }
+            if summary.cancelled { return ("minus.circle.fill", StatusColor.inactive) }
+            return ("checkmark.circle.fill", StatusColor.verified)
         }()
         return Image(systemName: symbol).foregroundStyle(color)
     }

@@ -14,7 +14,11 @@ read-back checksum verification.
   runs: a job you set up mid-run (files plus a destination) joins the end of
   the line, and jobs not yet started can be dragged into a new order (or
   right-click ▸ Move Up/Down) without disturbing the job that is copying.
-  Pressing one job's **Copy** runs just that job, but anything you set up
+  The run controls (Start/Stop Queue, Pause, Cancel) sit in the window
+  toolbar, and every command is also in the **Queue** and **Job** menus with
+  keyboard shortcuts (⌘R start, ⌘. cancel, ⌘↩ run the selected job, ⌘1/⌘2
+  file list or statistics).
+  Pressing one job's **Copy Now** runs just that job, but anything you set up
   while it copies still queues behind it; jobs that were already waiting can
   join with **Add to Queue**. Finished jobs stay in the
   list with their complete per-file results — every file still shows its
@@ -90,8 +94,10 @@ read-back checksum verification.
   the *display* is still free to turn off, so an overnight copy doesn't burn
   the screen. Verify it any time with
   `pmset -g assertions | grep -i vericopy`; it disappears the moment the
-  queue ends. Each job also has a **When done** setting (Do nothing / Sleep
-  the Mac / Quit VeriCopy) with a default in Settings ▸ Energy. Before it acts
+  queue ends. The queue has one **When Done** choice (Do Nothing / Sleep the
+  Mac / Quit VeriCopy), set from the toolbar, Queue ▸ When Queue Finishes or
+  Settings ▸ Energy; the toolbar label shows what is armed. A run made up only
+  of jobs from the local API never sleeps or quits. Before it acts
   you get a floating, cancelable countdown (30 s by default) that appears over
   other apps and wakes the display first. It is **skipped entirely** if the run
   had failures or you stopped the queue — on a failed run VeriCopy tells you it

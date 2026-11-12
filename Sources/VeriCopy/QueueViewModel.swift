@@ -14,6 +14,9 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
     @Published var queueActive = false
     @Published var conflict: ConflictPrompt?
     @Published var alertMessage: String?
+    /// The job whose name is being edited in the sidebar. Lives here so the Job menu's
+    /// Rename can start the same inline edit the context menu does.
+    @Published var renamingJobID: UUID?
 
     private var jobCounter = 0
     /// The job currently executing. Published so surfaces like the menu-bar indicator can
@@ -34,8 +37,10 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
     // the test machine.
     var powerController: PowerController = InertPowerController()
     var powerSettings = PowerSettings()
-    /// Per-job completion actions for the jobs that actually ran this queue pass, in order.
-    private var runActions: [CompletionAction] = []
+    /// Whether a job set up in the window (not one posted to the local API) ran this run.
+    /// The queue's When Done choice applies only to such a run: a run made up entirely of API
+    /// jobs never sleeps the Mac or quits, so a dashboard request cannot do either.
+    private var runIncludedUserJob = false
     /// Summaries for everything the current run has executed, across any resumes. Cleared only
     /// by a fresh Start, so the end-of-run decision covers every job the user queued in that run.
     private var runSummaries: [TransferSummary] = []
@@ -209,7 +214,7 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         stopRequested = false
         completedThisRun = []
         runSummaries = []
-        runActions = []
+        runIncludedUserJob = false
         // A job posted to the local API is never held back: the API promises it starts as
         // soon as the queue reaches it.
         heldBackJobIDs = only
@@ -288,7 +293,7 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
             return
         }
 
-        armCompletion(summaries: runSummaries, actions: runActions, stopRequested: wasStopped)
+        armCompletion(summaries: runSummaries, userJobRan: runIncludedUserJob, stopRequested: wasStopped)
     }
 
     /// Cancels one job by identity, whether it is running or still waiting in the queue.
@@ -365,7 +370,7 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
 
         completedThisRun.append(summary)
         runSummaries.append(summary)
-        runActions.append(job.completionAction)
+        if !job.createdViaAPI { runIncludedUserJob = true }
         await notifyJobComplete(job, summary: summary)
     }
 
@@ -411,8 +416,12 @@ final class QueueViewModel: ObservableObject, TransferEngineDelegate {
         }
     }
 
-    private func armCompletion(summaries: [TransferSummary], actions: [CompletionAction], stopRequested: Bool) {
+    private func armCompletion(summaries: [TransferSummary], userJobRan: Bool, stopRequested: Bool) {
         let outcome = RunOutcome.summarize(summaries, stopRequested: stopRequested)
+        // One When Done choice for the whole queue, read when the run ends so a change made
+        // mid-run counts. With no per-job actions the policy uses that choice; `.nothing`
+        // keeps a run of only API jobs from sleeping or quitting.
+        let actions: [CompletionAction] = userJobRan ? [] : [.nothing]
         switch powerSettings.decideCompletion(jobActions: actions, outcome: outcome) {
         case .doNothing:
             break
