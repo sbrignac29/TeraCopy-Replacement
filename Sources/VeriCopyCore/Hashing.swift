@@ -79,6 +79,29 @@ public enum HashAlgorithm: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Lowercase hex, two digits per byte.
+///
+/// A digest used to be rendered with one `String(format: "%02x")` per byte. Every file is hashed
+/// twice — once as it is copied, once as it is read back — so a job of small files paid for 64
+/// trips through the string formatter per file with SHA-256, 128 with SHA-512, to produce text
+/// a table lookup produces directly.
+enum HexEncoding {
+    private static let digits = Array("0123456789abcdef".utf8)
+
+    static func lowercase(_ bytes: UnsafeRawBufferPointer) -> String {
+        let digits = Self.digits
+        return String(unsafeUninitializedCapacity: bytes.count * 2) { output in
+            var position = 0
+            for byte in bytes {
+                output[position] = digits[Int(byte >> 4)]
+                output[position + 1] = digits[Int(byte & 0x0F)]
+                position += 2
+            }
+            return position
+        }
+    }
+}
+
 final class DigestHasher<H: HashFunction>: StreamingHasher {
     private var hash = H()
 
@@ -91,7 +114,7 @@ final class DigestHasher<H: HashFunction>: StreamingHasher {
     }
 
     func finalizedHex() -> String {
-        hash.finalize().map { String(format: "%02x", $0) }.joined()
+        hash.finalize().withUnsafeBytes { HexEncoding.lowercase($0) }
     }
 }
 
