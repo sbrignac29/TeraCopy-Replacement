@@ -118,14 +118,36 @@ final class DigestHasher<H: HashFunction>: StreamingHasher {
     }
 }
 
+/// CRC-32 as used by zip, PNG and `.sfv` files, computed eight bytes at a step.
+///
+/// The textbook form looks one byte up in a 256-entry table, and each step has to wait for the
+/// one before it — which held this to a few hundred MB/s, slower than SHA-256 on a Mac with
+/// hardware SHA and well under what an internal SSD delivers. So the checksum offered as the
+/// fast one was the one that capped the copy.
+///
+/// "Slicing-by-8" folds eight bytes in at once using eight tables, where table `k` holds what
+/// table 0 gives for a byte followed by `k` zero bytes. The eight lookups do not depend on each
+/// other, so the processor runs them side by side. Same polynomial, same answer for every input;
+/// the selftest checks it against the one-byte form at every length and alignment.
 public final class CRC32Hasher: StreamingHasher {
-    private static let table: [UInt32] = (0..<256).map { i in
-        var c = UInt32(i)
-        for _ in 0..<8 {
-            c = (c & 1 == 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1)
+    /// The eight tables end to end: table `k` is entries `k * 256 ..< (k + 1) * 256`.
+    private static let tables: [UInt32] = {
+        var tables = [UInt32](repeating: 0, count: 8 * 256)
+        for i in 0..<256 {
+            var c = UInt32(i)
+            for _ in 0..<8 {
+                c = (c & 1 == 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1)
+            }
+            tables[i] = c
         }
-        return c
-    }
+        for k in 1..<8 {
+            for i in 0..<256 {
+                let previous = tables[(k - 1) * 256 + i]
+                tables[k * 256 + i] = (previous >> 8) ^ tables[Int(previous & 0xFF)]
+            }
+        }
+        return tables
+    }()
 
     private var crc: UInt32 = 0xFFFFFFFF
 
@@ -138,11 +160,38 @@ public final class CRC32Hasher: StreamingHasher {
     }
 
     public func update(buffer: UnsafeRawBufferPointer) {
-        var value = crc
-        for byte in buffer {
-            value = Self.table[Int((value ^ UInt32(byte)) & 0xFF)] ^ (value >> 8)
+        guard let base = buffer.baseAddress, !buffer.isEmpty else { return }
+        let count = buffer.count
+        let start = crc
+        crc = Self.tables.withUnsafeBufferPointer { tables -> UInt32 in
+            // Raw pointer into the tables: the indices below are all a table number times 256
+            // plus one byte, so they cannot leave the 2,048 entries, and a bounds check on
+            // each of eight lookups per step is most of what this loop would otherwise do.
+            let table = tables.baseAddress!
+            var value = start
+            var offset = 0
+
+            // Eight bytes at a step. The buffer starts wherever the caller's data starts, so
+            // the loads must not assume alignment.
+            while count - offset >= 8 {
+                let low = UInt32(littleEndian: base.loadUnaligned(fromByteOffset: offset, as: UInt32.self)) ^ value
+                let high = UInt32(littleEndian: base.loadUnaligned(fromByteOffset: offset + 4, as: UInt32.self))
+                let a = table[7 * 256 + Int(low & 0xFF)] ^ table[6 * 256 + Int((low >> 8) & 0xFF)]
+                let b = table[5 * 256 + Int((low >> 16) & 0xFF)] ^ table[4 * 256 + Int(low >> 24)]
+                let c = table[3 * 256 + Int(high & 0xFF)] ^ table[2 * 256 + Int((high >> 8) & 0xFF)]
+                let d = table[1 * 256 + Int((high >> 16) & 0xFF)] ^ table[Int(high >> 24)]
+                value = a ^ b ^ c ^ d
+                offset += 8
+            }
+
+            // Whatever is left, up to seven bytes, one at a time.
+            while offset < count {
+                let byte = base.load(fromByteOffset: offset, as: UInt8.self)
+                value = table[Int((value ^ UInt32(byte)) & 0xFF)] ^ (value >> 8)
+                offset += 1
+            }
+            return value
         }
-        crc = value
     }
 
     public func finalizedHex() -> String {
