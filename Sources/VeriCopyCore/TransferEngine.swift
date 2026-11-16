@@ -758,7 +758,12 @@ public final class TransferEngine {
         // never holds a half-written file, even if the app dies mid-copy.
         let partial = destination.deletingLastPathComponent()
             .appendingPathComponent(".\(destination.lastPathComponent).vcpart")
-        try? fm.removeItem(at: partial)
+        // Clear out a partial left by a run that died. There almost never is one, and asking
+        // FileManager to remove a file that is not there makes it build an error for us to
+        // throw away — once per file. `lstat` answers first, for about a microsecond.
+        if Self.exists(partial.path) {
+            try? fm.removeItem(at: partial)
+        }
 
         let copyWatch = startStopwatch()
         copyClock.begin(copyWatch)
@@ -853,14 +858,12 @@ public final class TransferEngine {
                              stampMetadataOnDescriptor: Bool,
                              flushBeforeReadBack: Bool,
                              onProgress: (Int64) -> Void) async throws -> String {
-        let fm = FileManager.default
-        guard fm.createFile(atPath: destination.path, contents: nil) else {
-            throw TransferError.cannotCreateFile(destination.path)
-        }
+        // Created before the source is opened, as it always was: when neither end can be
+        // opened, the error reported is the destination's.
+        let output = try Self.createPartial(atPath: destination.path)
+        defer { try? output.close() }
         let input = try FileHandle(forReadingFrom: source)
         defer { try? input.close() }
-        let output = try FileHandle(forWritingTo: destination)
-        defer { try? output.close() }
 
         _ = fcntl(input.fileDescriptor, F_RDAHEAD, 1)
         // Preallocation only pays off for files big enough to fragment; on a folder of
@@ -1120,6 +1123,33 @@ public final class TransferEngine {
     private static func posixError(_ verb: String, _ code: Int32) -> Error {
         NSError(domain: NSPOSIXErrorDomain, code: Int(code),
                 userInfo: [NSLocalizedDescriptionKey: "\(verb) failed: \(String(cString: strerror(code)))"])
+    }
+
+    /// Creates the partial file and opens it for writing, in one `open(2)`.
+    ///
+    /// This was `FileManager.createFile` followed by `FileHandle(forWritingTo:)`: one call to
+    /// make an empty file and a second path lookup to open it. `createFile` is also far from a
+    /// bare create — Foundation writes the (empty) contents atomically, to a temporary file it
+    /// then renames into place. So every file copied cost an extra create and an extra rename
+    /// on the destination, on top of the rename that moves the finished partial into place, and
+    /// on ExFAT directory work like that is the dominant cost of a small file. Do not put
+    /// `createFile` back.
+    ///
+    /// `O_EXCL` keeps the result the same. The caller has just removed any stale partial, so
+    /// normally nothing is there. If something still is, it is something that could not be
+    /// removed, and the old rename-over-it would have failed for the same reason the removal
+    /// did; this fails too, with the same error. It also means a symlink squatting on the
+    /// partial's name is never followed — the write can only ever land in a file made here.
+    ///
+    /// The mode is what Foundation asks for as well; the real permissions are stamped from
+    /// the source once the data is written.
+    private static func createPartial(atPath path: String) throws -> FileHandle {
+        var descriptor: Int32
+        repeat {
+            descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o666)
+        } while descriptor < 0 && errno == EINTR
+        guard descriptor >= 0 else { throw TransferError.cannotCreateFile(path) }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
 
     /// Best-effort contiguous preallocation of the destination — reduces fragmentation and
