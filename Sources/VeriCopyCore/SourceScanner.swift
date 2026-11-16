@@ -58,8 +58,12 @@ public enum SourceScanner {
             }
         }
 
-        // Create shallow directories before deep ones.
-        plan.directories.sort { $0.components(separatedBy: "/").count < $1.components(separatedBy: "/").count }
+        // Create shallow directories before deep ones. Each path's depth is counted once and the
+        // sort compares the counts, rather than splitting both paths again at every comparison.
+        plan.directories = plan.directories
+            .map { (depth: $0.components(separatedBy: "/").count, path: $0) }
+            .sorted { $0.depth < $1.depth }
+            .map { $0.path }
         return plan
     }
 

@@ -706,9 +706,14 @@ public final class TransferEngine {
         // Copy folder metadata (dates, permissions, xattrs) deepest-first so parents are stamped last,
         // then — for moves — remove source folders that are now empty.
         if mode != .verify && !summary.cancelled {
-            let byDepth = plan.directorySources.sorted {
-                $0.relative.components(separatedBy: "/").count > $1.relative.components(separatedBy: "/").count
-            }
+            // Depth is worked out once per folder and the sort compares the numbers. Splitting
+            // both paths inside the comparison did it again for every pair the sort looked at,
+            // thousands of folders deep into a large tree. The comparisons come out the same,
+            // so the order does too.
+            let byDepth = plan.directorySources
+                .map { (depth: $0.relative.components(separatedBy: "/").count, entry: $0) }
+                .sorted { $0.depth > $1.depth }
+                .map { $0.entry }
             for entry in byDepth {
                 let destDir = destinationRoot.appendingPathComponent(entry.relative)
                 copyMetadata(from: entry.source, to: destDir, extended: carriesExtendedMetadata)

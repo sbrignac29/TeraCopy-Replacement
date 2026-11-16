@@ -175,6 +175,9 @@ do {
     let plan = SourceScanner.scan(sources: [copySource.appendingPathComponent("tree")])
     check(plan.items.count == 5, "scanner found 5 items", detail: "got \(plan.items.count)")
     check(plan.scanErrors.isEmpty, "no scan errors")
+    let depths = plan.directories.map { $0.components(separatedBy: "/").count }
+    check(plan.directories.count == 4 && plan.directories.first == "tree" && depths == depths.sorted(),
+          "directories are listed shallow before deep", detail: "\(plan.directories)")
 
     let delegate = TestDelegate()
     let engine = TransferEngine()
