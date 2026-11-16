@@ -1,14 +1,14 @@
 #!/bin/bash
-# Builds VeriCopy.app from scratch: release binary, icon, bundle, ad-hoc signature.
+# Builds "VeriCopy <version> (<build>).app" from scratch: release binary, icon, bundle,
+# ad-hoc signature. The build number is the commit count, so higher means newer.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP="VeriCopy.app"
-
 # Replacing the bundle while VeriCopy runs could break a live transfer, so refuse.
+# Matches every copy, versioned or not ("VeriCopy.app", "VeriCopy 1.0 (10).app").
 refuse_if_running() {
     local procs
-    if procs="$(pgrep -fl "VeriCopy.app/Contents/MacOS/VeriCopy")"; then
+    if procs="$(pgrep -fl 'VeriCopy[^/]*\.app/Contents/MacOS/VeriCopy')"; then
         echo "error: VeriCopy is running; quit it before rebuilding the bundle:" >&2
         echo "$procs" >&2
         exit 1
@@ -95,9 +95,28 @@ EOF
     echo "==> Using fallback SDK: $SDKROOT"
 }
 
+# Sets VERSION (from Info.plist), BUILD (commit count) and COMMIT (short hash, with
+# "-modified" when the app's sources differ from that commit).
+read_version() {
+    VERSION="$(plutil -extract CFBundleShortVersionString raw -o - Resources/Info.plist)"
+    if BUILD="$(git rev-list --count HEAD 2>/dev/null)" &&
+        COMMIT="$(git rev-parse --short HEAD 2>/dev/null)"; then
+        if [ -n "$(git status --porcelain -- Sources Package.swift Resources \
+            ':(exclude,glob)**/.DS_Store')" ]; then
+            COMMIT="$COMMIT-modified"
+        fi
+    else
+        BUILD=0
+        COMMIT="unknown"
+    fi
+}
+
 refuse_if_running
 choose_sdk
 export SDKROOT
+read_version
+APP="VeriCopy $VERSION ($BUILD).app"
+echo "==> Version: $VERSION, build $BUILD ($COMMIT)"
 
 # SwiftPM 6.4 defaults to the swiftbuild system, which lays out .build
 # differently; pin the native one so the binary path below stays stable.
@@ -120,6 +139,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/VeriCopy" "$APP/Contents/MacOS/VeriCopy"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+plutil -replace CFBundleVersion -string "$BUILD" "$APP/Contents/Info.plist"
+plutil -replace VeriCopyGitCommit -string "$COMMIT" "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 echo "==> Signing (ad-hoc)"

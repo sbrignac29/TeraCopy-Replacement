@@ -9,19 +9,29 @@ import VeriCopyCore
 struct JobStatsView: View {
     @ObservedObject var job: TransferJob
 
+    /// Chart lines use colors no status uses, so a line is never read as "verified" (green)
+    /// or "copying" (blue). Read is also dashed, so the two lines differ by more than color
+    /// and both stay visible when they overlap. Indigo measures 5.09:1 light / 4.75:1 dark,
+    /// purple 4.17:1 / 4.59:1.
+    private static let writeColor = Color.indigo
+    private static let readColor = Color.purple
+    private static let writeStroke = StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+    private static let readStroke = StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: [5, 4])
+
     var body: some View {
         let counts = job.statusCounts
 
         VStack(spacing: 16) {
             HStack(spacing: 12) {
                 StatTile(value: counts.copied, label: "Copied",
-                         icon: "doc.on.doc.fill", color: .blue)
+                         icon: "doc.on.doc.fill", color: StatusColor.copying)
                 StatTile(value: counts.verified, label: "Verified",
-                         icon: "checkmark.seal.fill", color: .green)
+                         icon: "checkmark.seal.fill", color: StatusColor.verified)
                 StatTile(value: counts.failed, label: "Failed",
-                         icon: "xmark.octagon.fill", color: counts.failed > 0 ? .red : .secondary)
+                         icon: failureSymbolName,
+                         color: counts.failed > 0 ? StatusColor.failed : StatusColor.inactive)
                 StatTile(value: counts.waiting, label: "Waiting",
-                         icon: "clock", color: .secondary)
+                         icon: "clock", color: StatusColor.inactive)
             }
             .fixedSize(horizontal: false, vertical: true)
 
@@ -34,8 +44,10 @@ struct JobStatsView: View {
                         Text("Transfer speed")
                             .font(.headline)
                         Spacer()
-                        legendValue(label: "Read", color: .blue, bps: job.readSpeedNow)
-                        legendValue(label: "Write", color: .green, bps: job.writeSpeedNow)
+                        legendValue(label: "Read", color: Self.readColor, stroke: Self.readStroke,
+                                    bps: job.readSpeedNow)
+                        legendValue(label: "Write", color: Self.writeColor, stroke: Self.writeStroke,
+                                    bps: job.writeSpeedNow)
                     }
 
                     // The graph fills the remaining vertical space (grows in a tall window),
@@ -47,7 +59,7 @@ struct JobStatsView: View {
                                  ? "Gathering samples…"
                                  : "Speeds are graphed here while the job runs.")
                                 .font(.callout)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             speedChart
@@ -74,7 +86,7 @@ struct JobStatsView: View {
                 )
                 .foregroundStyle(by: .value("Direction", "Read"))
                 .interpolationMethod(.monotone)
-                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .lineStyle(Self.readStroke)
             }
             ForEach(job.speedHistory) { sample in
                 LineMark(
@@ -84,10 +96,10 @@ struct JobStatsView: View {
                 )
                 .foregroundStyle(by: .value("Direction", "Write"))
                 .interpolationMethod(.monotone)
-                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .lineStyle(Self.writeStroke)
             }
         }
-        .chartForegroundStyleScale(["Read": Color.blue, "Write": Color.green])
+        .chartForegroundStyleScale(["Read": Self.readColor, "Write": Self.writeColor])
         .chartLegend(.hidden) // the live legend values above stand in for it
         .chartYScale(domain: .automatic(includesZero: true))
         .chartYAxisLabel("MB/s")
@@ -95,9 +107,17 @@ struct JobStatsView: View {
         .animation(.easeOut(duration: 0.35), value: job.speedHistory.count)
     }
 
-    private func legendValue(label: String, color: Color, bps: Double) -> some View {
+    /// The swatch is a short stretch of the line itself, dash and all, so the legend matches
+    /// the chart without relying on color.
+    private func legendValue(label: String, color: Color, stroke: StrokeStyle, bps: Double) -> some View {
         HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 8, height: 8)
+            Path { path in
+                path.move(to: CGPoint(x: 1, y: 4))
+                path.addLine(to: CGPoint(x: 17, y: 4))
+            }
+            .stroke(color, style: stroke)
+            .frame(width: 18, height: 8)
+            .accessibilityHidden(true)
             Text(label).foregroundStyle(.secondary)
             Text(bps > 0 ? "\(bytes(Int64(bps)))/s" : "—")
                 .monospacedDigit()

@@ -294,7 +294,8 @@ final class APIRouter {
         // Always on. For a move this is what stands between a verified copy and a deleted
         // source: the engine removes each source only once its copy reads back clean.
         job.verification = .perFile
-        job.completionAction = .nothing // never sleep or quit the Mac behind a dashboard request
+        // `createdViaAPI` (above) also keeps a run of only API jobs from sleeping the Mac or
+        // quitting when it ends, whatever the queue's When Done choice is.
         job.destination = destinationRoot
         job.sourceRoots = [sourceURL]
         job.items = plan.items
