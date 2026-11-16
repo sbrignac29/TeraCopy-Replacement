@@ -101,6 +101,11 @@ do {
     let plan = SourceScanner.scan(sources: [copySource.appendingPathComponent("tree")])
     check(plan.items.count == 5, "scanner found 5 items", detail: "got \(plan.items.count)")
     check(plan.scanErrors.isEmpty, "no scan errors")
+    check(Set(plan.directories) == ["tree", "tree/nested", "tree/empty-dir", "tree/nested/deeper"]
+              && plan.directories.count == 4,
+          "scanner found 4 directories", detail: "got \(plan.directories)")
+    check(plan.directories.first == "tree" && plan.directories.last == "tree/nested/deeper",
+          "directories are listed shallow before deep", detail: "got \(plan.directories)")
 
     let delegate = TestDelegate()
     let engine = TransferEngine()
@@ -134,6 +139,99 @@ do {
 
     // Source must be untouched by a copy.
     check(fm.fileExists(atPath: copySource.appendingPathComponent("tree/file1.txt").path), "source intact after copy")
+}
+
+// ============================================================
+print("== Scanner: names that begin with a combining mark ==")
+do {
+    // U+0338 (COMBINING LONG SOLIDUS OVERLAY) fuses with the "/" before it into one Character, so
+    // grapheme-based prefix tests on the path used to drop these entries — and everything beneath
+    // such a folder — without a scan error. Paths are built by plain string concatenation here so
+    // the fixture does not depend on how URL splits or joins such names.
+    let mark = "\u{0338}"
+    let source = try makeTempDir("combining-src")
+    let rootPath = source.path + "/tree"
+    let relDirs = [
+        "tree",
+        "tree/plain",
+        "tree/\(mark)odd dir",
+        "tree/\(mark)odd dir/\(mark)inner",
+    ]
+    let relFiles = [
+        "tree/plain/ordinary.txt",
+        "tree/\(mark)odd file.txt",
+        "tree/\(mark)odd dir/inside.txt",
+        "tree/\(mark)odd dir/\(mark)inner/deep.txt",
+    ]
+    for dir in relDirs {
+        try fm.createDirectory(atPath: source.path + "/" + dir, withIntermediateDirectories: true)
+    }
+    var expectedBytes: Int64 = 0
+    for (index, file) in relFiles.enumerated() {
+        let payload = randomData(1_000 + index * 37)
+        expectedBytes += Int64(payload.count)
+        try payload.write(to: URL(fileURLWithPath: source.path + "/" + file))
+    }
+    let topLevel = Set((try? fm.contentsOfDirectory(atPath: rootPath)) ?? [])
+    check(topLevel == ["plain", "\(mark)odd dir", "\(mark)odd file.txt"],
+          "fixture: the volume stored the combining-mark names", detail: "got \(topLevel.sorted())")
+
+    // Byte-exact views of the plan: String == would do, but bytes leave no room for doubt.
+    func bytes(_ strings: [String]) -> Set<[UInt8]> { Set(strings.map { Array($0.utf8) }) }
+    func show(_ strings: [String]) -> String { strings.map { $0.debugDescription }.joined(separator: ", ") }
+
+    let plan = SourceScanner.scan(sources: [URL(fileURLWithPath: rootPath, isDirectory: true)])
+    let itemPaths = plan.items.map(\.relativePath)
+    check(plan.items.count == relFiles.count && bytes(itemPaths) == bytes(relFiles),
+          "every file is in the plan, including those named or nested under a leading combining mark",
+          detail: "got [\(show(itemPaths))]")
+    check(plan.directories.count == relDirs.count && bytes(plan.directories) == bytes(relDirs),
+          "every directory is in the plan",
+          detail: "got [\(show(plan.directories))]")
+    check(bytes(plan.directorySources.map(\.relative)) == bytes(relDirs),
+          "every directory has a source entry for metadata copy and move cleanup")
+    check(plan.totalBytes == expectedBytes, "total size covers every file",
+          detail: "got \(plan.totalBytes), expected \(expectedBytes)")
+    check(plan.scanErrors.isEmpty, "no scan errors", detail: plan.scanErrors.joined(separator: "; "))
+
+    // Shallow before deep, judged on bytes: each directory's parent must already have been listed.
+    var listed = Set<[UInt8]>()
+    var parentFirst = true
+    for dir in plan.directories {
+        let raw = Array(dir.utf8)
+        if let slash = raw.lastIndex(of: UInt8(ascii: "/")), !listed.contains(Array(raw[..<slash])) {
+            parentFirst = false
+        }
+        listed.insert(raw)
+    }
+    check(parentFirst, "directories are listed shallow before deep",
+          detail: "got [\(show(plan.directories))]")
+
+    // The plan has to survive the engine too: copy it, then move it.
+    let dest = try makeTempDir("combining-dst")
+    let copied = await TransferEngine().run(plan: plan, mode: .copy, algorithm: .sha256,
+                                            destinationRoot: dest, delegate: TestDelegate())
+    check(copied.succeeded == relFiles.count && copied.failed == 0 && copied.fatalError == nil,
+          "copy: every file copied and verified",
+          detail: copied.fatalError ?? "ok=\(copied.succeeded) failed=\(copied.failed)")
+    let missing = relFiles.filter {
+        !fm.contentsEqual(atPath: source.path + "/" + $0, andPath: dest.path + "/" + $0)
+    }
+    check(missing.isEmpty, "copy: every file is byte-identical at the destination",
+          detail: "missing or different: [\(show(missing))]")
+
+    let moveDest = try makeTempDir("combining-move-dst")
+    let moved = await TransferEngine(forceCrossVolume: true).run(
+        plan: SourceScanner.scan(sources: [URL(fileURLWithPath: rootPath, isDirectory: true)]),
+        mode: .move, algorithm: .sha256, destinationRoot: moveDest, delegate: TestDelegate())
+    check(moved.succeeded == relFiles.count && moved.failed == 0 && moved.fatalError == nil,
+          "move: every file moved and verified",
+          detail: moved.fatalError ?? "ok=\(moved.succeeded) failed=\(moved.failed)")
+    check(relFiles.allSatisfy { fm.fileExists(atPath: moveDest.path + "/" + $0) },
+          "move: every file is present at the destination")
+    // Source folders are removed deepest-first; a miscounted depth would leave the tree behind.
+    check(!fm.fileExists(atPath: rootPath), "move: the emptied source tree was removed",
+          detail: "left behind: \((try? fm.subpathsOfDirectory(atPath: rootPath)) ?? [])")
 }
 
 // ============================================================

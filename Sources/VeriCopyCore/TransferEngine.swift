@@ -692,7 +692,7 @@ public final class TransferEngine {
         // then — for moves — remove source folders that are now empty.
         if mode != .verify && !summary.cancelled {
             let byDepth = plan.directorySources.sorted {
-                $0.relative.components(separatedBy: "/").count > $1.relative.components(separatedBy: "/").count
+                SourceScanner.depth(of: $0.relative) > SourceScanner.depth(of: $1.relative)
             }
             for entry in byDepth {
                 let destDir = destinationRoot.appendingPathComponent(entry.relative)
