@@ -3,14 +3,27 @@
 A stable, native macOS replacement for TeraCopy: copy or move files with real,
 read-back checksum verification.
 
-**The app:** `VeriCopy.app` in this folder — double-click to run, or drag it to
-`/Applications`.
+**The app:** `Scripts/build_app.sh` writes `VeriCopy <version> (<build>).app` to
+this folder — double-click to run, or drag it to `/Applications`. The build number
+counts commits, so the highest is the newest, and the title bar shows the version
+and commit of the copy you're running. `VeriCopy.app` is the last bundle committed
+to git. Run one copy at a time: they share settings.
 
 ## Features
 
 - **Job queue.** The sidebar lists copy jobs; each job has its own files,
   destination, mode, and verification settings. Build several jobs, then
-  **Start Queue** to run them one after another. Finished jobs stay in the
+  **Start Queue** to run them one after another. The queue stays open while it
+  runs: a job you set up mid-run (files plus a destination) joins the end of
+  the line, and jobs not yet started can be dragged into a new order (or
+  right-click ▸ Move Up/Down) without disturbing the job that is copying.
+  The run controls (Start/Stop Queue, Pause, Cancel) sit in the window
+  toolbar, and every command is also in the **Queue** and **Job** menus with
+  keyboard shortcuts (⌘R start, ⌘. cancel, ⌘↩ run the selected job, ⌘1/⌘2
+  file list or statistics).
+  Pressing one job's **Copy Now** runs just that job, but anything you set up
+  while it copies still queues behind it; jobs that were already waiting can
+  join with **Add to Queue**. Finished jobs stay in the
   list with their complete per-file results — every file still shows its
   verified status and checksum. Jobs can also be run individually, re-run,
   or removed (right-click). **Rename any job** to label what it's copying —
@@ -84,8 +97,10 @@ read-back checksum verification.
   the *display* is still free to turn off, so an overnight copy doesn't burn
   the screen. Verify it any time with
   `pmset -g assertions | grep -i vericopy`; it disappears the moment the
-  queue ends. Each job also has a **When done** setting (Do nothing / Sleep
-  the Mac / Quit VeriCopy) with a default in Settings ▸ Energy. Before it acts
+  queue ends. The queue has one **When Done** choice (Do Nothing / Sleep the
+  Mac / Quit VeriCopy), set from the toolbar, Queue ▸ When Queue Finishes or
+  Settings ▸ Energy; the toolbar label shows what is armed. A run made up only
+  of jobs from the local API never sleeps or quits. Before it acts
   you get a floating, cancelable countdown (30 s by default) that appears over
   other apps and wakes the display first. It is **skipped entirely** if the run
   had failures or you stopped the queue — on a failed run VeriCopy tells you it
@@ -133,7 +148,7 @@ read-back checksum verification.
 Requires only Xcode Command Line Tools (Swift 6+):
 
 ```bash
-./Scripts/build_app.sh    # runs the test suite, builds, bundles, signs VeriCopy.app
+./Scripts/build_app.sh    # runs the test suite, builds, bundles, signs VeriCopy <version> (<build>).app
 ```
 
 ## Testing

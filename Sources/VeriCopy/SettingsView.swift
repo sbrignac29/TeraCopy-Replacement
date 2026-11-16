@@ -114,10 +114,14 @@ struct SettingsView: View {
             Section {
                 ForEach(api.allowedRoots, id: \.self) { root in
                     HStack(spacing: 6) {
-                        Image(systemName: FileManager.default.fileExists(atPath: root)
-                              ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .foregroundStyle(FileManager.default.fileExists(atPath: root)
-                                             ? Color.green : Color.orange)
+                        if FileManager.default.fileExists(atPath: root) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .accessibilityLabel("Available")
+                        } else {
+                            WarningSymbol()
+                                .accessibilityLabel("Not mounted")
+                        }
                         Text(root)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
@@ -133,7 +137,7 @@ struct SettingsView: View {
                 Text("Allowed Folders")
             } footer: {
                 Text("A copy is refused unless both its source and destination sit inside one of "
-                     + "these. An orange marker means that drive is not mounted right now. "
+                     + "these. A warning sign means that drive is not mounted right now. "
                      + "Edit the list in \(APIConfig.fileName), then press Reload Config.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -160,7 +164,7 @@ struct SettingsView: View {
 
                 if authStatus == .denied {
                     HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                        WarningSymbol()
                         Text("Notifications are turned off for VeriCopy in System Settings.")
                             .font(.callout).foregroundStyle(.secondary)
                         Button("Open Settings") { openNotificationSettings() }
@@ -216,7 +220,7 @@ struct SettingsView: View {
                     Spacer()
                     Text(ftpRootPath.isEmpty ? "No folder chosen"
                                              : URL(fileURLWithPath: ftpRootPath).lastPathComponent)
-                        .foregroundStyle(ftpRootPath.isEmpty ? .tertiary : .secondary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                     Button("Choose…") { chooseReceiveFolder() }
                         .disabled(ftp.isRunning)
@@ -316,8 +320,10 @@ struct SettingsView: View {
                 Section {
                     ForEach(ftp.receivedFiles.prefix(8)) { file in
                         HStack(spacing: 6) {
-                            Image(systemName: file.verified ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                                .foregroundStyle(file.verified ? .green : .yellow)
+                            // Not verified means the saved file did not match: a failure.
+                            Image(systemName: file.verified ? "checkmark.seal.fill" : failureSymbolName)
+                                .foregroundStyle(file.verified ? StatusColor.verified : StatusColor.failed)
+                                .accessibilityLabel(file.verified ? "Verified" : "Did not verify")
                             Text(file.name).lineLimit(1).truncationMode(.middle)
                             Spacer()
                             Text(byteText(file.size))
@@ -377,8 +383,9 @@ struct SettingsView: View {
                         Text(action.label).tag(action)
                     }
                 }
-                Text("The default for new jobs. Each job can override it with its own "
-                     + "“When done” setting.")
+                Text("One choice for the whole queue — the same one as When Done in the toolbar "
+                     + "and Queue ▸ When Queue Finishes. A run made up only of jobs from the "
+                     + "local API never sleeps the Mac or quits.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 

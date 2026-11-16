@@ -12,8 +12,8 @@ final class PowerCoordinator {
     // UserDefaults keys, shared with SettingsView's @AppStorage.
     enum Key {
         static let keepAwakeEnabled = "powerKeepAwakeEnabled"
-        /// Deliberately the same key TransferJob uses for its per-job sticky default, so the
-        /// Settings default and a new job's initial choice stay in agreement.
+        /// The queue's one When Done choice. Settings ▸ Energy, the toolbar menu and
+        /// Queue ▸ When Queue Finishes all bind to this key.
         static let completionAction = "powerCompletionAction"
         static let countdownSeconds = "powerCountdownSeconds"
         static let skipAfterFailures = "powerSkipAfterFailures"

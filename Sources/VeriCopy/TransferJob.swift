@@ -14,6 +14,9 @@ enum JobState: Equatable {
 @MainActor
 final class TransferJob: ObservableObject, Identifiable {
     let id = UUID()
+    /// Creation order, counted from 1. The queue can be reordered, so anything that means
+    /// "newest" (the API listing) must use this rather than position in the list.
+    let number: Int
 
     @Published var name: String
     @Published var mode: TransferMode = .copy
@@ -23,17 +26,15 @@ final class TransferJob: ObservableObject, Identifiable {
     @Published var verification: VerificationPolicy = .perFile {
         didSet { if persistsSettings { UserDefaults.standard.set(verification.rawValue, forKey: "verificationPolicy") } }
     }
-    /// What happens once the whole queue finishes. Sticky across jobs and launches, and
-    /// shared with the Settings default — same key, same pattern as `verification` above.
-    @Published var completionAction: CompletionAction = .nothing {
-        didSet { if persistsSettings { UserDefaults.standard.set(completionAction.rawValue, forKey: "powerCompletionAction") } }
-    }
     /// Whether changing this job's settings also updates the app-wide defaults.
     ///
     /// True for jobs the user builds in the window — picking SHA-512 there should stick for
     /// next time. False for jobs created over the API, which set their own mode and
-    /// verification policy and must not quietly rewrite the user's preferences (or inherit
-    /// "Sleep the Mac when done" and put the machine to sleep behind a dashboard request).
+    /// verification policy and must not quietly rewrite the user's preferences.
+    ///
+    /// What happens when the queue finishes is not a job setting: it is one choice for the
+    /// whole queue (`PowerSettings.defaultCompletionAction`), and a run of only API jobs
+    /// never acts on it (see `QueueViewModel.runIncludedUserJob`).
     var persistsSettings = true
     @Published var destination: URL?
     /// The file list.
@@ -117,6 +118,7 @@ final class TransferJob: ObservableObject, Identifiable {
     private var hasEMA = false
 
     init(number: Int) {
+        self.number = number
         name = "Job \(number)"
         if let raw = UserDefaults.standard.string(forKey: "hashAlgorithm"),
            let saved = HashAlgorithm(rawValue: raw) {
@@ -125,10 +127,6 @@ final class TransferJob: ObservableObject, Identifiable {
         if let raw = UserDefaults.standard.string(forKey: "verificationPolicy"),
            let saved = VerificationPolicy(rawValue: raw) {
             verification = saved
-        }
-        if let raw = UserDefaults.standard.string(forKey: "powerCompletionAction"),
-           let saved = CompletionAction(rawValue: raw) {
-            completionAction = saved
         }
     }
 

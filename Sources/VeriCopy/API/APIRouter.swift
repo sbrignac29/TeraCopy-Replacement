@@ -67,7 +67,9 @@ final class APIRouter {
                 // The empty draft VeriCopy always keeps at the end of the list is scaffolding
                 // for the window, not a job — reporting it as permanently "queued" would just
                 // confuse a dashboard that never created it.
-                let real = queue.jobs.reversed().filter { !($0.items.isEmpty && $0.destination == nil) }
+                // Ordered by creation, not list position: the user can reorder queued jobs.
+                let real = queue.jobs.sorted { $0.number > $1.number }
+                    .filter { !($0.items.isEmpty && $0.destination == nil) }
                 return .json(JobListResponse(jobs: real.map(status(of:))))
             default:
                 return methodNotAllowed(request)
@@ -292,7 +294,8 @@ final class APIRouter {
         // Always on. For a move this is what stands between a verified copy and a deleted
         // source: the engine removes each source only once its copy reads back clean.
         job.verification = .perFile
-        job.completionAction = .nothing // never sleep or quit the Mac behind a dashboard request
+        // `createdViaAPI` (above) also keeps a run of only API jobs from sleeping the Mac or
+        // quitting when it ends, whatever the queue's When Done choice is.
         job.destination = destinationRoot
         job.sourceRoots = [sourceURL]
         job.items = plan.items
