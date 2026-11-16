@@ -253,14 +253,25 @@ public final class TransferEngine {
         var copyFilesTotal = 0, verifyFilesTotal = 0
         var bytesNeeded: Int64 = 0
 
+        // Which files a move can satisfy with a rename, decided here once. The ledger below and
+        // the copy loop both turn on this answer, and each used to ask for itself: two volume
+        // lookups per file apiece, four in all, to learn the same thing twice — on a same-volume
+        // move, where a file is otherwise one rename, a large share of what the file cost. Asking
+        // once also means the work that was planned is the work that gets done.
+        let mayRename = mode == .move && !forceCrossVolume
+        let destinationVolume = mayRename ? Self.volumeIdentifier(of: destinationRoot) : nil
+        var isRename = [Bool](repeating: false, count: items.count)
+
         for index in items.indices {
             let item = items[index]
             if !item.isSymlink {
                 if mode == .verify {
                     plannedVerify[index] = item.size
-                } else if mode == .copy || forceCrossVolume || !sameVolume(item.sourceURL, destinationRoot) {
-                    // Anything else is a same-volume move: a rename, so no data is streamed
-                    // and there is nothing to read back.
+                } else if mayRename && Self.isOnVolume(destinationVolume, item.sourceURL) {
+                    // A same-volume move: a rename, so no data is streamed and there is nothing
+                    // to read back.
+                    isRename[index] = true
+                } else {
                     bytesNeeded += item.size
                     plannedCopy[index] = item.size
                     if verifies { plannedVerify[index] = item.size }
@@ -512,7 +523,11 @@ public final class TransferEngine {
                                         overwriting: overwriting, removeSource: mode == .move)
                         items[index].status = .doneNoVerify
                         items[index].message = mode == .move ? "Symlink moved" : "Symlink copied"
-                    } else if mode == .move && !forceCrossVolume && sameVolume(items[index].sourceURL, destinationRoot) {
+                    } else if isRename[index], Self.exists(items[index].sourceURL.path) {
+                        // The `exists` is for a source that has disappeared since the job was
+                        // planned. Its volume could no longer be looked up, so it always fell
+                        // through to the copy below and failed there — before anything at the
+                        // destination was touched, which matters when overwriting. It still does.
                         if overwriting { try fm.removeItem(at: destination) }
                         try fm.moveItem(at: items[index].sourceURL, to: destination)
                         items[index].status = .doneNoVerify
@@ -1277,12 +1292,18 @@ public final class TransferEngine {
         }
     }
 
-    private func sameVolume(_ a: URL, _ b: URL) -> Bool {
-        guard let va = try? a.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier,
-              let vb = try? b.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier else {
-            return false
-        }
-        return va.isEqual(vb)
+    /// The identity of the volume holding `url`, or nil when the system will not say.
+    private static func volumeIdentifier(of url: URL) -> NSObjectProtocol? {
+        let values = try? url.resourceValues(forKeys: [.volumeIdentifierKey])
+        return values?.volumeIdentifier
+    }
+
+    /// Whether `url` is on the volume `volume` identifies. False when either is unknown, which
+    /// sends a move down the copy, verify, then delete path — the one that is safe wherever the
+    /// file really is.
+    private static func isOnVolume(_ volume: NSObjectProtocol?, _ url: URL) -> Bool {
+        guard let volume, let other = volumeIdentifier(of: url) else { return false }
+        return other.isEqual(volume)
     }
 
     /// Finds a non-conflicting sibling name: "file 2.txt", "file 3.txt", …
