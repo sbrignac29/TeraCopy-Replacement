@@ -253,14 +253,25 @@ public final class TransferEngine {
         var copyFilesTotal = 0, verifyFilesTotal = 0
         var bytesNeeded: Int64 = 0
 
+        // Which files a move can satisfy with a rename, decided here once. The ledger below and
+        // the copy loop both turn on this answer, and each used to ask for itself: two volume
+        // lookups per file apiece, four in all, to learn the same thing twice — on a same-volume
+        // move, where a file is otherwise one rename, a large share of what the file cost. Asking
+        // once also means the work that was planned is the work that gets done.
+        let mayRename = mode == .move && !forceCrossVolume
+        let destinationVolume = mayRename ? Self.volumeIdentifier(of: destinationRoot) : nil
+        var isRename = [Bool](repeating: false, count: items.count)
+
         for index in items.indices {
             let item = items[index]
             if !item.isSymlink {
                 if mode == .verify {
                     plannedVerify[index] = item.size
-                } else if mode == .copy || forceCrossVolume || !sameVolume(item.sourceURL, destinationRoot) {
-                    // Anything else is a same-volume move: a rename, so no data is streamed
-                    // and there is nothing to read back.
+                } else if mayRename && Self.isOnVolume(destinationVolume, item.sourceURL) {
+                    // A same-volume move: a rename, so no data is streamed and there is nothing
+                    // to read back.
+                    isRename[index] = true
+                } else {
                     bytesNeeded += item.size
                     plannedCopy[index] = item.size
                     if verifies { plannedVerify[index] = item.size }
@@ -512,7 +523,11 @@ public final class TransferEngine {
                                         overwriting: overwriting, removeSource: mode == .move)
                         items[index].status = .doneNoVerify
                         items[index].message = mode == .move ? "Symlink moved" : "Symlink copied"
-                    } else if mode == .move && !forceCrossVolume && sameVolume(items[index].sourceURL, destinationRoot) {
+                    } else if isRename[index], Self.exists(items[index].sourceURL.path) {
+                        // The `exists` is for a source that has disappeared since the job was
+                        // planned. Its volume could no longer be looked up, so it always fell
+                        // through to the copy below and failed there — before anything at the
+                        // destination was touched, which matters when overwriting. It still does.
                         if overwriting { try fm.removeItem(at: destination) }
                         try fm.moveItem(at: items[index].sourceURL, to: destination)
                         items[index].status = .doneNoVerify
@@ -691,9 +706,14 @@ public final class TransferEngine {
         // Copy folder metadata (dates, permissions, xattrs) deepest-first so parents are stamped last,
         // then — for moves — remove source folders that are now empty.
         if mode != .verify && !summary.cancelled {
-            let byDepth = plan.directorySources.sorted {
-                $0.relative.components(separatedBy: "/").count > $1.relative.components(separatedBy: "/").count
-            }
+            // Depth is worked out once per folder and the sort compares the numbers. Splitting
+            // both paths inside the comparison did it again for every pair the sort looked at,
+            // thousands of folders deep into a large tree. The comparisons come out the same,
+            // so the order does too.
+            let byDepth = plan.directorySources
+                .map { (depth: $0.relative.components(separatedBy: "/").count, entry: $0) }
+                .sorted { $0.depth > $1.depth }
+                .map { $0.entry }
             for entry in byDepth {
                 let destDir = destinationRoot.appendingPathComponent(entry.relative)
                 copyMetadata(from: entry.source, to: destDir, extended: carriesExtendedMetadata)
@@ -758,7 +778,12 @@ public final class TransferEngine {
         // never holds a half-written file, even if the app dies mid-copy.
         let partial = destination.deletingLastPathComponent()
             .appendingPathComponent(".\(destination.lastPathComponent).vcpart")
-        try? fm.removeItem(at: partial)
+        // Clear out a partial left by a run that died. There almost never is one, and asking
+        // FileManager to remove a file that is not there makes it build an error for us to
+        // throw away — once per file. `lstat` answers first, for about a microsecond.
+        if Self.exists(partial.path) {
+            try? fm.removeItem(at: partial)
+        }
 
         let copyWatch = startStopwatch()
         copyClock.begin(copyWatch)
@@ -853,14 +878,12 @@ public final class TransferEngine {
                              stampMetadataOnDescriptor: Bool,
                              flushBeforeReadBack: Bool,
                              onProgress: (Int64) -> Void) async throws -> String {
-        let fm = FileManager.default
-        guard fm.createFile(atPath: destination.path, contents: nil) else {
-            throw TransferError.cannotCreateFile(destination.path)
-        }
+        // Created before the source is opened, as it always was: when neither end can be
+        // opened, the error reported is the destination's.
+        let output = try Self.createPartial(atPath: destination.path)
+        defer { try? output.close() }
         let input = try FileHandle(forReadingFrom: source)
         defer { try? input.close() }
-        let output = try FileHandle(forWritingTo: destination)
-        defer { try? output.close() }
 
         _ = fcntl(input.fileDescriptor, F_RDAHEAD, 1)
         // Preallocation only pays off for files big enough to fragment; on a folder of
@@ -1122,6 +1145,33 @@ public final class TransferEngine {
                 userInfo: [NSLocalizedDescriptionKey: "\(verb) failed: \(String(cString: strerror(code)))"])
     }
 
+    /// Creates the partial file and opens it for writing, in one `open(2)`.
+    ///
+    /// This was `FileManager.createFile` followed by `FileHandle(forWritingTo:)`: one call to
+    /// make an empty file and a second path lookup to open it. `createFile` is also far from a
+    /// bare create — Foundation writes the (empty) contents atomically, to a temporary file it
+    /// then renames into place. So every file copied cost an extra create and an extra rename
+    /// on the destination, on top of the rename that moves the finished partial into place, and
+    /// on ExFAT directory work like that is the dominant cost of a small file. Do not put
+    /// `createFile` back.
+    ///
+    /// `O_EXCL` keeps the result the same. The caller has just removed any stale partial, so
+    /// normally nothing is there. If something still is, it is something that could not be
+    /// removed, and the old rename-over-it would have failed for the same reason the removal
+    /// did; this fails too, with the same error. It also means a symlink squatting on the
+    /// partial's name is never followed — the write can only ever land in a file made here.
+    ///
+    /// The mode is what Foundation asks for as well; the real permissions are stamped from
+    /// the source once the data is written.
+    private static func createPartial(atPath path: String) throws -> FileHandle {
+        var descriptor: Int32
+        repeat {
+            descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o666)
+        } while descriptor < 0 && errno == EINTR
+        guard descriptor >= 0 else { throw TransferError.cannotCreateFile(path) }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
     /// Best-effort contiguous preallocation of the destination — reduces fragmentation and
     /// allocation-table churn, which matters on ExFAT/FAT32. Ignored where unsupported.
     private static func preallocate(_ fd: Int32, size: Int64) {
@@ -1247,12 +1297,18 @@ public final class TransferEngine {
         }
     }
 
-    private func sameVolume(_ a: URL, _ b: URL) -> Bool {
-        guard let va = try? a.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier,
-              let vb = try? b.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier else {
-            return false
-        }
-        return va.isEqual(vb)
+    /// The identity of the volume holding `url`, or nil when the system will not say.
+    private static func volumeIdentifier(of url: URL) -> NSObjectProtocol? {
+        let values = try? url.resourceValues(forKeys: [.volumeIdentifierKey])
+        return values?.volumeIdentifier
+    }
+
+    /// Whether `url` is on the volume `volume` identifies. False when either is unknown, which
+    /// sends a move down the copy, verify, then delete path — the one that is safe wherever the
+    /// file really is.
+    private static func isOnVolume(_ volume: NSObjectProtocol?, _ url: URL) -> Bool {
+        guard let volume, let other = volumeIdentifier(of: url) else { return false }
+        return other.isEqual(volume)
     }
 
     /// Finds a non-conflicting sibling name: "file 2.txt", "file 3.txt", …

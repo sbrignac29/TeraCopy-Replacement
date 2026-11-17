@@ -89,6 +89,80 @@ do {
     check(hexOf(.sha256, "abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 known answer")
     check(hexOf(.md5, "abc") == "900150983cd24fb0d6963f7d28e17f72", "MD5 known answer")
     check(hexOf(.sha1, "abc") == "a9993e364706816aba3e25717850c26c9cd0d89d", "SHA-1 known answer")
+    // This digest has bytes below 0x10 in it (…a20a9e…, …e80e2a…), so it also pins that every
+    // byte is written as two digits.
+    check(hexOf(.sha512, "abc") == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+            + "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", "SHA-512 known answer")
+    check(hexOf(.sha256, "") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "SHA-256 of empty input")
+    check(hexOf(.crc32, "") == "00000000", "CRC-32 of empty input")
+}
+
+// ============================================================
+print("== CRC-32 agrees with the byte-at-a-time reference ==")
+do {
+    // The plain one-byte-per-step CRC-32, kept here as the oracle: whatever CRC32Hasher does
+    // to go faster, it has to give this answer for every input.
+    let table: [UInt32] = (0..<256).map { i in
+        var c = UInt32(i)
+        for _ in 0..<8 { c = (c & 1 == 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1) }
+        return c
+    }
+    func reference(_ bytes: ArraySlice<UInt8>) -> String {
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in bytes { crc = table[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8) }
+        return String(format: "%08x", crc ^ 0xFFFFFFFF)
+    }
+    // Fixed seed, so a failure names a case that can be run again.
+    var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+    func next(_ bound: Int) -> Int {
+        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17
+        return Int(seed % UInt64(bound))
+    }
+
+    var wholeMismatch: String?
+    var piecesMismatch: String?
+    // Every short length, so each count of leftover bytes is covered, then a few sizes the
+    // engine really hands over — including one that is not a multiple of anything.
+    let lengths = Array(0...300) + [4_096, 65_537, 9 * 1024 * 1024 + 5]
+    for length in lengths {
+        // A random lead-in, so the hashed bytes begin at every alignment.
+        let lead = next(8)
+        let bytes = [UInt8](randomData(lead + length))
+        let expected = reference(bytes[lead...])
+
+        let whole = CRC32Hasher()
+        bytes.withUnsafeBytes { raw in
+            whole.update(buffer: UnsafeRawBufferPointer(rebasing: raw[lead...]))
+        }
+        if whole.finalizedHex() != expected, wholeMismatch == nil {
+            wholeMismatch = "length \(length), lead-in \(lead)"
+        }
+
+        // The same bytes in uneven pieces, the way a chunked copy delivers them.
+        let pieces = CRC32Hasher()
+        let largestPiece = length > 4_096 ? 70_000 : 40
+        bytes.withUnsafeBytes { raw in
+            var position = lead
+            while position < raw.count {
+                let end = min(raw.count, position + 1 + next(largestPiece))
+                pieces.update(buffer: UnsafeRawBufferPointer(rebasing: raw[position..<end]))
+                position = end
+            }
+        }
+        if pieces.finalizedHex() != expected, piecesMismatch == nil {
+            piecesMismatch = "length \(length), lead-in \(lead)"
+        }
+    }
+    check(wholeMismatch == nil, "one update gives the reference CRC-32 at every length and alignment",
+          detail: wholeMismatch ?? "")
+    check(piecesMismatch == nil, "uneven pieces give the reference CRC-32",
+          detail: piecesMismatch ?? "")
+
+    let data = randomData(1_000_003)
+    let viaData = CRC32Hasher()
+    viaData.update(data)
+    check(viaData.finalizedHex() == reference([UInt8](data)[...]), "CRC-32 over Data matches the reference")
 }
 
 // ============================================================
@@ -101,6 +175,9 @@ do {
     let plan = SourceScanner.scan(sources: [copySource.appendingPathComponent("tree")])
     check(plan.items.count == 5, "scanner found 5 items", detail: "got \(plan.items.count)")
     check(plan.scanErrors.isEmpty, "no scan errors")
+    let depths = plan.directories.map { $0.components(separatedBy: "/").count }
+    check(plan.directories.count == 4 && plan.directories.first == "tree" && depths == depths.sorted(),
+          "directories are listed shallow before deep", detail: "\(plan.directories)")
 
     let delegate = TestDelegate()
     let engine = TransferEngine()
@@ -251,6 +328,50 @@ do {
     check(collector.last?.status == .doneNoVerify, "status reports verification was skipped",
           detail: "\(String(describing: collector.last?.status))")
     check(collector.last?.checksum != nil, "checksum still computed for the manifest")
+}
+
+// ============================================================
+print("== A stale partial is replaced, never written through ==")
+do {
+    let source = try makeTempDir("stale-src")
+    let dest = try makeTempDir("stale-dst")
+    let outside = try makeTempDir("stale-outside")
+    let small = source.appendingPathComponent("a.bin")
+    let large = source.appendingPathComponent("b.bin")
+    try randomData(200_000).write(to: small)
+    try randomData(3 * 1024 * 1024).write(to: large)
+
+    // What a run that died mid-copy leaves behind: junk under the partial's name. Read-only,
+    // as it would be if the source's permissions had already been stamped onto it.
+    let junk = dest.appendingPathComponent(".a.bin.vcpart")
+    try randomData(50_000).write(to: junk)
+    try fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: junk.path)
+
+    // And a partial's name that is really a symlink to a file somewhere else. The copy has to
+    // replace the link itself; writing through it would destroy the file it points at.
+    let bystander = outside.appendingPathComponent("bystander.txt")
+    try "do not touch".data(using: .utf8)!.write(to: bystander)
+    try fm.createSymbolicLink(atPath: dest.appendingPathComponent(".b.bin.vcpart").path,
+                              withDestinationPath: bystander.path)
+
+    let plan = SourceScanner.scan(sources: [small, large])
+    let summary = await TransferEngine().run(plan: plan, mode: .copy, algorithm: .sha256,
+                                             destinationRoot: dest, delegate: TestDelegate())
+    check(summary.succeeded == 2 && summary.failed == 0, "both files copy over their stale partials",
+          detail: "\(summary.succeeded) succeeded, \(summary.failed) failed")
+    check(fm.contentsEqual(atPath: small.path, andPath: dest.appendingPathComponent("a.bin").path),
+          "file with a junk partial is byte-identical")
+    check(fm.contentsEqual(atPath: large.path, andPath: dest.appendingPathComponent("b.bin").path),
+          "file with a symlinked partial is byte-identical")
+    let copiedType = (try? fm.attributesOfItem(atPath: dest.appendingPathComponent("b.bin").path))?[.type]
+        as? FileAttributeType
+    check(copiedType == .typeRegular, "the copy is a regular file, not the stale link",
+          detail: "\(String(describing: copiedType))")
+    check((try? String(contentsOf: bystander, encoding: .utf8)) == "do not touch",
+          "the file a symlinked partial pointed at is untouched")
+    let leftovers = ((try? fm.contentsOfDirectory(atPath: dest.path)) ?? []).sorted()
+    check(leftovers == ["a.bin", "b.bin"], "nothing but the two copies is left in the destination",
+          detail: "\(leftovers)")
 }
 
 // ============================================================
@@ -939,10 +1060,11 @@ if let benchIndex = CommandLine.arguments.firstIndex(of: "--bench") {
         }
     }
 
-    func bench(_ label: String, sources: [URL], dest: URL, mbTotal: Double, verify: Bool) async {
+    func bench(_ label: String, sources: [URL], dest: URL, mbTotal: Double, verify: Bool,
+               algorithm: HashAlgorithm = .sha256) async {
         let plan = SourceScanner.scan(sources: sources)
         let started = Date()
-        let result = await TransferEngine().run(plan: plan, mode: .copy, algorithm: .sha256,
+        let result = await TransferEngine().run(plan: plan, mode: .copy, algorithm: algorithm,
                                                 destinationRoot: dest,
                                                 verification: verify ? .perFile : .off,
                                                 delegate: NullDelegate())
@@ -962,6 +1084,10 @@ if let benchIndex = CommandLine.arguments.firstIndex(of: "--bench") {
         await bench("1.5 GiB file, verify ON  → \(label)", sources: [big], dest: dest, mbTotal: 1536, verify: true)
         try? fm.removeItem(at: dest.appendingPathComponent("big.bin"))
         await bench("1.5 GiB file, verify OFF → \(label)", sources: [big], dest: dest, mbTotal: 1536, verify: false)
+        try? fm.removeItem(at: dest.appendingPathComponent("big.bin"))
+        // With the hash this cheap, the copy should run at whatever the drives allow.
+        await bench("1.5 GiB file, CRC-32, verify OFF → \(label)", sources: [big], dest: dest, mbTotal: 1536,
+                    verify: false, algorithm: .crc32)
         try? fm.removeItem(at: dest.appendingPathComponent("big.bin"))
         await bench("2,000 × 64 KiB, verify ON  → \(label)", sources: [smallDir], dest: dest, mbTotal: 125, verify: true)
         try? fm.removeItem(at: dest.appendingPathComponent("small"))
