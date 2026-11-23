@@ -158,6 +158,15 @@ extension CompletionAction {
         }
     }
 
+    /// Mid-sentence form for tooltips.
+    var helpPhrase: String {
+        switch self {
+        case .nothing: return "do nothing"
+        case .sleep: return "sleep the Mac"
+        case .quit: return "quit VeriCopy"
+        }
+    }
+
     var symbolName: String {
         switch self {
         case .nothing: return "flag.checkered"

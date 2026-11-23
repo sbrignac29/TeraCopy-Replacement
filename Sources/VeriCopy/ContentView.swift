@@ -31,44 +31,28 @@ struct ContentView: View {
         // Run controls live in the window toolbar, at the top where a moved window cannot hide
         // them. Every item is also in the menu bar (see VeriCopyCommands).
         .toolbar {
+            // Queue controls on the left, one fixed group so nothing moves when a run starts.
             ToolbarItem(placement: .navigation) {
-                QueueRunButton(queue: queue)
-            }
-            if let job = queue.currentJob {
-                ToolbarItem(placement: .navigation) {
-                    PauseResumeButton(job: job, queue: queue)
-                }
-                ToolbarItem(placement: .navigation) {
-                    Button {
-                        queue.cancelCurrentJob()
-                    } label: {
-                        Label("Cancel Current Job", systemImage: "xmark")
-                    }
-                    .help("Cancel “\(job.name)” and go on to the next job")
-                }
+                QueueTransportControls(queue: queue)
             }
             ToolbarItem(placement: .navigation) {
                 CompletionMenu()
             }
+            // The selected job's action on the right, in its own capsule.
             if let job = queue.selectedJob {
                 ToolbarItem(placement: .primaryAction) {
                     JobToolbarAction(job: job, queue: queue)
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    queue.newJob()
-                } label: {
-                    Label("New Job", systemImage: "plus")
-                }
-                .help("New Job")
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
             }
             ToolbarItem(placement: .primaryAction) {
                 ViewModePicker()
             }
         }
         // Under the job name in the title bar, so you can tell which build is running.
-        .navigationSubtitle(AppVersion.display)
+        .navigationSubtitle(AppVersion.subtitle)
         .sheet(item: $queue.conflict) { prompt in
             ConflictSheet(prompt: prompt)
                 .environmentObject(queue)
@@ -136,6 +120,18 @@ struct SidebarView: View {
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 270)
+        // New Job sits above the job list it adds to, next to the sidebar button, rather than
+        // beside Copy Now, where it read as part of the same control.
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    queue.newJob()
+                } label: {
+                    Label("New Job", systemImage: "plus")
+                }
+                .help("New Job")
+            }
+        }
         // Housekeeping only. Starting and stopping the queue is in the toolbar, because the
         // bottom of a sidebar is the first thing a moved window hides.
         .safeAreaInset(edge: .bottom) {

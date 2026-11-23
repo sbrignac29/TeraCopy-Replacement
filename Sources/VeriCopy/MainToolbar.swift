@@ -4,61 +4,70 @@ import VeriCopyCore
 // The main window's toolbar items. Each one observes exactly what it shows, so a job
 // becoming ready or a run pausing updates its button without re-rendering the window.
 
-/// Start Queue, or Stop Queue while a run is going.
-struct QueueRunButton: View {
+/// The queue's transport controls as one fixed group: a single play/pause button that follows
+/// the run (Start Queue when idle, Pause while a job copies, Resume when it is paused) and
+/// Stop Queue. Both are always present and grey out when they do not apply, so nothing in the
+/// toolbar shifts when a run starts or ends. Cancel Current Job is in the Queue menu (⌘.).
+struct QueueTransportControls: View {
     @ObservedObject var queue: QueueViewModel
-    /// Readiness belongs to the jobs, which the queue does not republish.
+    /// Readiness and the running job's state belong to the jobs, which the queue does not
+    /// republish.
     @ObservedObject private var status = QueueStatusMonitor.shared
 
     var body: some View {
-        if queue.queueActive {
+        ControlGroup {
+            switch status.runningJobState {
+            case .running:
+                Button {
+                    queue.pauseCurrent()
+                } label: {
+                    Label("Pause Current Job", systemImage: "pause.fill")
+                }
+                .help(jobHelp("Pause"))
+            case .paused:
+                Button {
+                    queue.resumeCurrent()
+                } label: {
+                    Label("Resume Current Job", systemImage: "play.fill")
+                }
+                .help(jobHelp("Resume"))
+            default:
+                // Between jobs a run is still going, so there is nothing to start or pause.
+                Button {
+                    queue.startQueue()
+                } label: {
+                    Label("Start Queue", systemImage: "play.fill")
+                }
+                .disabled(queue.queueActive || !status.hasReadyJobs)
+                .help(status.hasReadyJobs || queue.queueActive
+                      ? "Start Queue: run every ready job, top to bottom"
+                      : "Start Queue: no job is ready yet. Each job needs files and a destination.")
+            }
+
             Button {
                 queue.stopQueue()
             } label: {
-                Label("Stop Queue", systemImage: "stop.fill")
+                Label("Stop Queue", systemImage: "xmark")
             }
-            .help("Cancel the current job and skip the rest of the queue")
-        } else {
-            Button {
-                queue.startQueue()
-            } label: {
-                Label("Start Queue", systemImage: "play.fill")
-            }
-            .disabled(!status.hasReadyJobs)
-            .help(status.hasReadyJobs
-                  ? "Run every ready job, top to bottom"
-                  : "No job is ready — each job needs files and a destination")
+            .disabled(!queue.queueActive)
+            .help(queue.queueActive
+                  ? "Stop Queue: cancel the current job and skip the rest of the queue"
+                  : "Stop Queue: the queue is not running")
         }
+        .labelStyle(.iconOnly)
     }
-}
 
-/// Pause or Resume for the job the queue is running, which may not be the selected one.
-struct PauseResumeButton: View {
-    @ObservedObject var job: TransferJob
-    @ObservedObject var queue: QueueViewModel
-
-    var body: some View {
-        if job.state == .paused {
-            Button {
-                queue.resumeCurrent()
-            } label: {
-                // Start Queue shows Stop while a run goes, so this play symbol stands alone.
-                Label("Resume Current Job", systemImage: "play.fill")
-            }
-            .help("Resume “\(job.name)”")
-        } else {
-            Button {
-                queue.pauseCurrent()
-            } label: {
-                Label("Pause Current Job", systemImage: "pause.fill")
-            }
-            .help("Pause “\(job.name)”")
+    private func jobHelp(_ verb: String) -> String {
+        guard let job = queue.currentJob, status.runningJobState != nil else {
+            return "\(verb) Current Job: nothing is running"
         }
+        return "\(verb) “\(job.name)”"
     }
 }
 
 /// What happens once the queue finishes. One choice for the whole queue, shared with
-/// Settings ▸ Energy and Queue ▸ When Queue Finishes. Its label says what is armed.
+/// Settings ▸ Energy and Queue ▸ When Queue Finishes. Icon only: the symbol changes and takes
+/// the accent color when something is armed, so a glance still tells you.
 struct CompletionMenu: View {
     @AppStorage(PowerCoordinator.Key.completionAction) private var completionRaw = CompletionAction.nothing.rawValue
 
@@ -73,9 +82,13 @@ struct CompletionMenu: View {
             .pickerStyle(.inline)
         } label: {
             Label(action.toolbarTitle, systemImage: action.symbolName)
-                .labelStyle(.titleAndIcon)
+                .labelStyle(.iconOnly)
+                .foregroundStyle(action == .nothing ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
         }
-        .help("What happens when the queue finishes. Skipped if anything failed or you stopped the queue.")
+        .menuIndicator(.hidden)
+        .help(action == .nothing
+              ? "When the queue finishes: do nothing. Click to sleep the Mac or quit VeriCopy afterwards."
+              : "When the queue finishes: \(action.helpPhrase). Skipped if anything failed or you stopped the queue.")
     }
 }
 
