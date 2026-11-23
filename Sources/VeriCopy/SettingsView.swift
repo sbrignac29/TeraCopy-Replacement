@@ -64,7 +64,9 @@ struct SettingsView: View {
         .frame(width: 520, height: 520)
         .task {
             await refreshAuth()
-            // Cached by the coordinator at launch — this does not hit the Keychain.
+            // Only shown if this launch already read it; never reads the Keychain itself, so
+            // opening Settings does not prompt. A saved but unread password shows as a
+            // placeholder instead.
             ftpPassword = FTPCoordinator.shared.password
         }
     }
@@ -228,7 +230,9 @@ struct SettingsView: View {
 
                 TextField("Username", text: $ftpUsername)
                     .disabled(ftp.isRunning)
-                SecureField("Password", text: $ftpPassword)
+                SecureField("Password", text: $ftpPassword,
+                            prompt: Text(ftp.hasPassword && !ftp.isPasswordLoaded
+                                         ? "Saved in Keychain" : ""))
                     .disabled(ftp.isRunning)
                     .onChange(of: ftpPassword) { _, new in
                         // Writes the Keychain only when the field actually changes —

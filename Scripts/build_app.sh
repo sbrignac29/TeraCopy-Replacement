@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds "VeriCopy <version> (<build>).app" from scratch: release binary, icon, bundle,
-# ad-hoc signature. The build number is the commit count, so higher means newer.
+# signature (local certificate if present, else ad-hoc). The build number is the commit
+# count, so higher means newer.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -143,8 +144,20 @@ plutil -replace CFBundleVersion -string "$BUILD" "$APP/Contents/Info.plist"
 plutil -replace VeriCopyGitCommit -string "$COMMIT" "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
-echo "==> Signing (ad-hoc)"
-codesign --force --sign - "$APP"
+# Sign with a stable identity when there is one. An ad-hoc signature is tied to the exact
+# binary, so the Keychain treats every rebuild as a new app and asks for the FTP password's
+# access again; a certificate keeps one identity across builds, so "Always Allow" sticks.
+# Create it once in Keychain Access ▸ Certificate Assistant ▸ Create a Certificate…
+# (Self-Signed Root, Code Signing) named as below, or set VERICOPY_SIGN_IDENTITY.
+SIGN_IDENTITY="${VERICOPY_SIGN_IDENTITY:-VeriCopy Local Signing}"
+# Without -v: a self-signed certificate is not "trusted", but codesign can still use it.
+if security find-identity -p codesigning | grep -qF "\"$SIGN_IDENTITY\""; then
+    echo "==> Signing with \"$SIGN_IDENTITY\""
+    codesign --force --sign "$SIGN_IDENTITY" "$APP"
+else
+    echo "==> Signing (ad-hoc; no \"$SIGN_IDENTITY\" certificate, so the Keychain will ask again)"
+    codesign --force --sign - "$APP"
+fi
 codesign --verify --verbose=2 "$APP"
 
 echo "==> Done: $(pwd)/$APP"

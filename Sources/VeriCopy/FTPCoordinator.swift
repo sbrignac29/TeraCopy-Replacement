@@ -42,8 +42,12 @@ final class FTPCoordinator: ObservableObject, FTPServerDelegate {
     /// unstoppable cascade of prompts. Everything the UI touches now reads this cache.
     private var cachedPassword = ""
     private var didLoadPassword = false
-    /// Published so the UI can gate the Start button without ever touching the Keychain.
+    /// Whether a password is saved. Known at launch from the item's attributes, which never
+    /// prompt, so the UI can gate the Start button without reading the secret.
     @Published private(set) var hasPassword = false
+
+    /// True once the password has been read (or set) this launch, so Settings can show it.
+    var isPasswordLoaded: Bool { didLoadPassword }
 
     var receiveFolder: URL? {
         guard let path = UserDefaults.standard.string(forKey: Key.rootPath), !path.isEmpty else {
@@ -64,7 +68,9 @@ final class FTPCoordinator: ObservableObject, FTPServerDelegate {
         KeychainStore.setPassword(newValue, account: settings.username)
     }
 
-    /// Reads the Keychain exactly once per launch, on demand. Never called from a view body.
+    /// Reads the Keychain exactly once per launch, when receiving starts. Never called from a
+    /// view body, and not at launch: reading the secret is what can raise the system prompt,
+    /// so a launch that never uses FTP never asks.
     func loadStoredPasswordIfNeeded() {
         guard !didLoadPassword else { return }
         didLoadPassword = true
@@ -75,8 +81,7 @@ final class FTPCoordinator: ObservableObject, FTPServerDelegate {
     /// Loads settings and starts observing changes. Does not start the server.
     func start() {
         sync()
-        // Resolve the stored password once, up front, so nothing later has to.
-        loadStoredPasswordIfNeeded()
+        hasPassword = KeychainStore.hasPassword(account: settings.username)
         observer = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { _ in
@@ -122,6 +127,13 @@ final class FTPCoordinator: ObservableObject, FTPServerDelegate {
     func startReceiving() {
         guard !isRunning, let folder = receiveFolder else { return }
         sync()
+        loadStoredPasswordIfNeeded()
+        guard !password.isEmpty else {
+            // Missing, or the system prompt was declined: ask for it again rather than run
+            // a server nobody can log in to.
+            statusMessage = "VeriCopy couldn't read the saved password. Enter it again in Settings ▸ Receive."
+            return
+        }
         let server = FTPServer(settings: settings, password: password, root: folder, delegate: self)
         if let error = server.start() {
             statusMessage = error

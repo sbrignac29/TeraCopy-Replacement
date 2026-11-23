@@ -60,6 +60,20 @@ enum KeychainStore {
         return value
     }
 
+    /// Whether a password is stored, without reading it. Asks for the item's attributes
+    /// only, which the Keychain hands over without an authorization prompt; only reading the
+    /// secret itself is gated by the item's access list. Safe to call at launch.
+    static func hasPassword(account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     static func deletePassword(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
